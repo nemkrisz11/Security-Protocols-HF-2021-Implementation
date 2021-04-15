@@ -1,5 +1,7 @@
 from secureFTP.netsim.communicator import Communicator
-from cryptography.hazmat.primitives import asymmetric, ciphers, hashes, serialization
+from cryptography.hazmat.primitives import ciphers, hashes, padding
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 import os
 import sys
 import getopt
@@ -15,6 +17,17 @@ class ServerCaller(type):
 
 class FTPServer(Communicator, metaclass=ServerCaller):
 
+    """
+    dict of dicts, the keys are network identifiers
+    value format:
+    { ConnStatus : 0 - Unauthenticated, 1 - Authenticated
+      SessionID :
+      DHPriv :
+      DHPub :
+      SessionKey :
+      ... ?
+    }
+    """
     active_sessions = {}
 
     def __init__(self, address, net_path):
@@ -28,13 +41,33 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         while True:
             status, received_msg = self.net_if.receive_msg(blocking=True)
 
-            print("Server got message")
-            print(status)
-            print(received_msg)
+            print("Server got message")  # Debug
+            print(status)  # Debug
+            print(received_msg)  # Debug
 
-            src = received_msg[0]
-            print("Source: ", end="")
-            print(src)
+            msg_src = received_msg[0]
+
+            if msg_src in self.active_sessions.keys():
+                # Existing connection, look up sessionID
+
+                session = self.active_sessions[msg_src]
+                id = session["SessionID"]
+
+                pass # TODO
+
+            else:
+                # New session init
+                # Generate ephemeral ECDH keypair
+                ecdh_server_private_key = ec.generate_private_key(ec.SECP521R1())
+                ecdh_server_public_key = ecdh_server_private_key.public_key()
+
+                # Choose SessionID for the session
+
+                # Construct session key
+
+                # Save session parameters
+
+                self.active_sessions[msg_src] = {}  # TODO
 
 
 if __name__ == "__main__":
