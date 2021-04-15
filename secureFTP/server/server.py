@@ -1,6 +1,8 @@
 from secureFTP.netsim.communicator import Communicator
 from cryptography.hazmat.primitives import asymmetric, ciphers, hashes, serialization
 import os
+import sys
+import getopt
 
 
 class ServerCaller(type):
@@ -34,4 +36,22 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
 
 if __name__ == "__main__":
-    server = FTPServer("A", "../network/")
+    try:
+        opts, args = getopt.getopt(sys.argv[1:], shortopts='hp:a:', longopts=['help', 'path=', 'addr='])
+    except getopt.GetoptError:
+        print("Usage: python server.py -p <network path> -a <address>")
+        sys.exit(1)
+
+    net_path = "../network/"
+    address = "A"
+
+    for opt, arg in opts:
+        if opt == '-h' or opt == '--help':
+            print("Usage: python server.py -p <network path> -a <address>")
+            sys.exit(0)
+        elif opt == '-p' or opt == '--path':
+            net_path = arg
+        elif opt == '-a' or opt == '--addr':
+            address = arg
+
+    server = FTPServer(address, net_path)
