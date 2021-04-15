@@ -4,7 +4,7 @@
 import os, sys, getopt, time
 from netinterface import network_interface
 
-NET_PATH = './'
+NET_PATH = '/'
 OWN_ADDR = 'A'
 
 # ------------       
