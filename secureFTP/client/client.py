@@ -24,7 +24,7 @@ class FTPClient(Communicator):
         client_random = secrets.token_bytes(32)
 
         # Send init message
-        msg = init_header + client_random + \
+        msg = bytes(self.address, 'utf-8') + init_header + client_random + \
               self.ecdh_client_public_key.public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
 
         self.net_if.send_msg(self.server_address, msg)

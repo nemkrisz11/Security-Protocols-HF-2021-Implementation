@@ -6,16 +6,15 @@ import sys
 
 """ Temporary(?) file for testing different client configurations and parallelism, might remove later"""
 
+
 def app_main(net_path):
     # Create client_1 instance
-    client_1 = FTPClient(address="B", server_address="A", net_path=net_path)
+    client_1 = FTPClient(address="C", server_address="A", net_path=net_path)
 
     client_1.init_session()
 
     # Create client_2 instance
-    client_1 = FTPClient("C", net_path)
-
-
+    # client_2 = FTPClient("C", net_path)
 
 
 if __name__ == "__main__":
@@ -25,7 +24,7 @@ if __name__ == "__main__":
         print("Usage: python app.py -p <network path>")
         sys.exit(1)
 
-    net_path = "../network/"
+    net_path = "./network/"
 
     for opt, arg in opts:
         if opt == '-h' or opt == '--help':

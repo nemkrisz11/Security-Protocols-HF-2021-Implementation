@@ -24,8 +24,6 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
         # Create server certificate
 
-        # Start main loop
-
     def serve(self):
         while True:
             status, received_msg = self.net_if.receive_msg(blocking=True)
@@ -33,6 +31,10 @@ class FTPServer(Communicator, metaclass=ServerCaller):
             print("Server got message")
             print(status)
             print(received_msg)
+
+            src = received_msg[0]
+            print("Source: ", end="")
+            print(src)
 
 
 if __name__ == "__main__":

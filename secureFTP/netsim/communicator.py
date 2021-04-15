@@ -22,8 +22,6 @@ class Communicator:
             print("Error: Invalid address " + address)
             sys.exit(1)
 
-        if len(address) > 1:
-            self.address = address[0]
-
+        self.address = address[0]
         self.net_path = net_path
         self.net_if = NetworkInterface(net_path, address)
