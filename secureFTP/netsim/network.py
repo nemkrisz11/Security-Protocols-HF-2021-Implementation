@@ -54,9 +54,12 @@ except getopt.GetoptError:
     print('Usage: python network.py -p <network path> -a <address space> [--clean]')
     sys.exit(1)
 
-# if len(opts) == 0:
-# 	print('Usage: python network.py -p <network path> -a <address space> [--clean]')
-# 	sys.exit(1)
+if len(opts) == 0:
+    # print('Usage: python network.py -p <network path> -a <address space> [--clean]')
+    # sys.exit(1)
+
+    NET_PATH = "../network/"
+    ADDR_SPACE = "ABC"
 
 for opt, arg in opts:
     if opt == '-h' or opt == '--help':

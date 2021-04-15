@@ -6,6 +6,7 @@ from secureFTP.netsim.netinterface import NetworkInterface
 
 class Communicator:
     address = ""
+    server_address = ""
     net_path = "./network/"
     net_if = None
 
