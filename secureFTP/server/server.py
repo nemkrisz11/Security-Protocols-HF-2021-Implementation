@@ -97,14 +97,15 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         padded_session_id = padder.update(session_id) + padder.finalize()
 
         # Construct the message
-        msg = self.address + init_header + padded_session_id + self.server_certificate + client_proof + \
-                    ecdh_server_public_key.public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+        # Msg = Address | Header | Padded SessionID | CertLen | Cert | Proof | ServerPublicKey | Sign(Msg)
+        msg = self.address + init_header + padded_session_id + bytes(len(self.server_certificate)) + \
+                self.server_certificate + client_proof + \
+                ecdh_server_public_key.public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
 
         # Sign the message
         signature = self.lt_server_private_key.sign(msg, ec.ECDSA(hashes.SHA512()))
         msg += signature
 
-        # Address | Header | Padded SessionID | Cert | Proof | ServerPublicKey | Sign(Payload)
         # Send server auth message
         self.net_if.send_msg(msg_src, msg)
 

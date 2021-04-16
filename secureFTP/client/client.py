@@ -11,6 +11,7 @@ class FTPClient(Communicator):
     server_address = None
     ecdh_client_private_key = None
     ecdh_client_public_key = None
+    session_id = None
     session_key = None
 
     def __init__(self, address, server_address, net_path):
@@ -32,16 +33,36 @@ class FTPClient(Communicator):
         self.net_if.send_msg(self.server_address, msg)
 
         # Wait for server response
+        # Msg = Address | Header | Padded SessionID | CertLen | Cert | Proof | ServerPublicKey | Sign(Msg)
         status, msg_server_init = self.net_if.receive_msg(blocking=True)
 
         msg_src = msg_server_init[0]
         msg = msg_server_init[1:]
 
         # Split message
-        header = msg[0:16]  # 16 bytes of header
+        idx = 0
+
+        header = msg[idx:idx + 16]  # 16 bytes of header
+        idx += 16
         if header != init_header:
             print("Header mismatch detected!")
             # TODO : error handling
+
+        padded_session_id = msg[idx:idx + 16]
+        unpadder = padding.ANSIX923(256).unpadder()
+        self.session_id = unpadder.update(padded_session_id) + unpadder.finalize()
+        idx += 16
+
+        server_certificate_length = int.from_bytes(msg[idx:idx + 2], "big")
+        idx += 2
+        server_certificate = msg[idx:idx + server_certificate_length]
+        idx += server_certificate_length
+
+        server_proof = msg[idx:idx + 32]
+        idx += 32
+
+        # ...
+
 
         # TODO : parse message, validate signature, etc.
 
