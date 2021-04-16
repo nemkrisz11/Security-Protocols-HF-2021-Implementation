@@ -148,7 +148,10 @@ class FTPServer(Communicator, metaclass=ServerCaller):
                 print(f'{user_name} successfully authenticated ')
                 session['ConnStatus'] = 1
                 session['SequenceClient'] = auth_msg['SequenceNumber']
-                # TODO: generate server sequence
+
+                server_sequence_bytes = secrets.token_bytes(8) + bytes(8)
+                session['SequenceServer'] = int.from_bytes(server_sequence_bytes, 'big')
+
                 # TODO: response msg
 
             except VerifyMismatchError:
