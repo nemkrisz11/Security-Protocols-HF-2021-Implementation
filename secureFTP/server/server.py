@@ -80,7 +80,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         }
 
         # Send server auth message
-        # Sign(Header | SessionID | Cert | Proof | ecdh_server_public_key | (HMAC?))
+        # Address | Sign(Header | SessionID | Cert | Proof | ecdh_server_public_key | (HMAC?))
 
     def authenticate_user(self, msg_src, msg):
         pass
