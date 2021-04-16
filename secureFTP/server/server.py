@@ -1,9 +1,13 @@
 from secureFTP.netsim.communicator import Communicator
 from secureFTP.protocol.header import *
 from cryptography.hazmat.primitives import ciphers, hashes, padding, serialization
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError, VerificationError, InvalidHash
+from datetime import datetime, timedelta
 import os
 import sys
 import getopt
@@ -110,20 +114,100 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         self.net_if.send_msg(msg_src, msg)
 
     async def authenticate_user(self, msg_src, msg):
-        # msg NONCE | EKs(SessionID | UNlen | Username | PWlen | Password | Seqclient) | MAC
+        session = self.active_sessions[msg_src]
+
+        auth_msg = self.unpack_auth_message(msg, session["SessionKey"])
+
+        if (session['SessionID'] != auth_msg['SessionID']):
+            # do some shit
+            # TODO: error msg
+            print('SessionID mismatch')
 
         client = pymongo.MongoClient(self.MONGODB_ADDRESS)
 
         db = client[self.DATABASE_NAME]
         collection = db[self.COLLECTION_NAME]
 
-        query = {"UserName": "test1"}
-        cursor = collection.find(query)
-        doc = next(cursor, None)
+        user_name = auth_msg['UserName']
+        query = {'UserName': user_name}
+        doc = collection.find_one(query)
         if doc:
-            # check the password
-            # doc["Password"]
-            pass
+            if doc['LockTime'] > datetime.now():
+                # auth locked msg
+                # TODO: error msg
+                print('Authentication locked for user')
+
+            password_hash = doc['Password']
+            password = auth_msg['Password']
+            ph = PasswordHasher()
+
+            try:
+                # Verify password, raises exception if wrong.
+                ph.verify(password_hash, password)
+
+                print(f'{user_name} successfully authenticated ')
+                session['ConnStatus'] = 1
+                session['SequenceClient'] = auth_msg['SequenceNumber']
+                # TODO: generate server sequence
+                # TODO: response msg
+
+            except VerifyMismatchError:
+                # pass-hash mismatch
+                if doc['AuthAttempts'] == 4:
+                    update = {'$set': {'AuthAttempts': 0, 'LockTime': datetime.now() + timedelta(minutes=10)}}
+                    collection.update_one(query, update)
+                else:
+                    update = {'$set': {'AuthAttempts': doc['AuthAttempts'] + 1}}
+                    collection.update_one(query, update)
+                # TODO: error msg
+                print('Authentication failed')
+            except VerificationError:
+                # fail for other reason
+                if doc['AuthAttempts'] == 4:
+                    update = {'$set': {'AuthAttempts': 0, 'LockTime': datetime.now() + timedelta(minutes=10)}}
+                    collection.update_one(query, update)
+                else:
+                    update = {'$set': {'AuthAttempts': doc['AuthAttempts'] + 1}}
+                    collection.update_one(query, update)
+                # TODO: error msg
+                print('Authentication failed')
+            except InvalidHash:
+                # invalid hash
+                if doc['AuthAttempts'] == 4:
+                    update = {'$set': {'AuthAttempts': 0, 'LockTime': datetime.now() + timedelta(minutes=10)}}
+                    collection.update_one(query, update)
+                else:
+                    update = {'$set': {'AuthAttempts': doc['AuthAttempts'] + 1}}
+                    collection.update_one(query, update)
+                # TODO: error msg
+                print('Authentication failed')
+        else:
+            # TODO: error msg
+            print('User not found')
+
+    def unpack_auth_message(self, msg, session_key):
+        # msg NONCE | EKs(SessionID | UNlen | Username | PWlen | Password | Seqclient) | MAC
+
+        nonce = msg[0:16]
+        encrypted_payload_with_tag = msg[16:]
+
+        aesgcm = AESGCM(session_key)
+        payload = aesgcm.decrypt(nonce, encrypted_payload_with_tag, None)
+
+        session_id = payload[0:8]
+        user_name_len = int.from_bytes([payload[9]], 'big')
+        user_name = payload[9:9+user_name_len].decode('utf-8')
+        password_len = int.from_bytes([payload[9+user_name_len]], 'big')
+        password = payload[-(password_len+16):-16].decode('utf-8')
+        sqn_num = payload[-16:]
+
+        return {
+            "Nonce": nonce,
+            "SessionID": session_id,
+            "UserName": user_name,
+            "Password": password,
+            "SequenceNumber": sqn_num
+        }
 
     # Do your thing
 
