@@ -8,6 +8,7 @@ import os
 import sys
 import getopt
 import secrets
+import pymongo
 
 
 class ServerCaller(type):
@@ -23,6 +24,10 @@ class FTPServer(Communicator, metaclass=ServerCaller):
     lt_server_private_key = None
     lt_server_public_key = None
     active_sessions = {}
+
+    DATABASE_NAME = 'secureFTP'
+    COLLECTION_NAME = 'Users'
+    MONGODB_ADDRESS = 'mongodb://localhost:27017/'
 
     def __init__(self, address, net_path):
         super().__init__(address, net_path)
@@ -92,7 +97,24 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         # Address | Sign(Header | padded_session_id | Cert | Proof | ecdh_server_public_key | (HMAC?))
 
     async def authenticate_user(self, msg_src, msg):
-        pass
+        # msg NONCE | EKs(SessionID | UNlen | Username | PWlen | Password | Seqclient) | MAC
+
+        client = pymongo.MongoClient(self.MONGODB_ADDRESS)
+
+        db = client[self.DATABASE_NAME]
+        collection = db[self.COLLECTION_NAME]
+
+        query = {"UserName": "test1"}
+        cursor = collection.find(query)
+        doc = next(cursor, None)
+        if doc:
+            # check the password
+            # doc["Password"]
+            pass
+
+    # Do your thing
+
+
 
     async def handle_command(self, msg_src, msg):
         pass
