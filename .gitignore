@@ -130,3 +130,6 @@ dmypy.json
 
 # PyCharm project directory
 .idea/
+
+# Local test files
+test.py

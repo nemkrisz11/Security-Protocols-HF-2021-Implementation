@@ -24,6 +24,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
     lt_server_private_key = None
     lt_server_public_key = None
     active_sessions = {}
+    server_certificate = None
 
     DATABASE_NAME = 'secureFTP'
     COLLECTION_NAME = 'Users'
@@ -82,7 +83,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         ).derive(shared_secret)
 
         # Save session parameters
-        self.active_sessions[received_msg] = {
+        self.active_sessions[msg_src] = {
             "ConnStatus": 0,
             "SessionID": session_id,
             "DHPrivServer": ecdh_server_private_key,
@@ -91,10 +92,21 @@ class FTPServer(Communicator, metaclass=ServerCaller):
             "SessionKey": session_key
         }
 
-        # Send server auth message
+        # Pad the SessionID
         padder = padding.ANSIX923(256).padder()
         padded_session_id = padder.update(session_id) + padder.finalize()
-        # Address | Sign(Header | padded_session_id | Cert | Proof | ecdh_server_public_key | (HMAC?))
+
+        # Construct the message
+        msg = self.address + init_header + padded_session_id + self.server_certificate + client_proof + \
+                    ecdh_server_public_key.public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+
+        # Sign the message
+        signature = self.lt_server_private_key.sign(msg, ec.ECDSA(hashes.SHA512()))
+        msg += signature
+
+        # Address | Header | Padded SessionID | Cert | Proof | ServerPublicKey | Sign(Payload)
+        # Send server auth message
+        self.net_if.send_msg(msg_src, msg)
 
     async def authenticate_user(self, msg_src, msg):
         # msg NONCE | EKs(SessionID | UNlen | Username | PWlen | Password | Seqclient) | MAC
