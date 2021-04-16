@@ -33,6 +33,13 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         # Save public key
 
         # Serialize, encrypt and save private key
+        ser_lt_server_private_key = self.lt_server_private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.BestAvailableEncryption(
+                b'testpassword') #  TODO: proper password
+            )
+        #  TODO: write encrypted private key to file
 
         # Create server certificate
 
@@ -80,7 +87,9 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         }
 
         # Send server auth message
-        # Address | Sign(Header | SessionID | Cert | Proof | ecdh_server_public_key | (HMAC?))
+        padder = padding.ANSIX923(256).padder()
+        padded_session_id = padder.update(session_id) + padder.finalize()
+        # Address | Sign(Header | padded_session_id | Cert | Proof | ecdh_server_public_key | (HMAC?))
 
     def authenticate_user(self, msg_src, msg):
         pass
