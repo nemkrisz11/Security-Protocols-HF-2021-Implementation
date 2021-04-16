@@ -43,7 +43,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
         # Create server certificate
 
-    def init_session(self, msg_src, received_msg):
+    async def init_session(self, msg_src, received_msg):
         # Split message
         header = received_msg[0:16]  # 16 bytes of header
         if header != init_header:
@@ -91,10 +91,10 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         padded_session_id = padder.update(session_id) + padder.finalize()
         # Address | Sign(Header | padded_session_id | Cert | Proof | ecdh_server_public_key | (HMAC?))
 
-    def authenticate_user(self, msg_src, msg):
+    async def authenticate_user(self, msg_src, msg):
         pass
 
-    def handle_command(self, msg_src, msg):
+    async def handle_command(self, msg_src, msg):
         pass
 
     def serve(self):
