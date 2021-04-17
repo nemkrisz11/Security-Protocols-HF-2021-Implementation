@@ -40,7 +40,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         # Generate server long-term keypair
         self.lt_server_private_key = ec.generate_private_key(ec.SECP521R1())
 
-        # Save public key
+        # TODO: Save public key
 
         # Serialize, encrypt and save private key
         ser_lt_server_private_key = self.lt_server_private_key.private_bytes(
@@ -51,7 +51,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
             )
         #  TODO: write encrypted private key to file
 
-        # Create server certificate
+        # TODO: Create server certificate
 
     async def init_session(self, msg_src, received_msg):
         # Split message
@@ -118,7 +118,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
         auth_msg = self.unpack_auth_message(msg, session["SessionKey"])
 
-        if (session['SessionID'] != auth_msg['SessionID']):
+        if session['SessionID'] != auth_msg['SessionID']:
             # do some shit
             # TODO: error msg
             print('SessionID mismatch')
