@@ -16,9 +16,7 @@ class CertificationAuthority:
         csr = x509.load_pem_x509_csr(csr)
 
         builder = x509.CertificateBuilder()
-        builder = builder.subject_name(x509.Name([
-            x509.NameAttribute(x509.NameOID.COMMON_NAME, csr.subject),
-        ]))
+        builder = builder.subject_name(csr.subject)
         builder = builder.issuer_name(x509.Name([
             x509.NameAttribute(x509.NameOID.COMMON_NAME, u'Example CA Inc.')
         ]))
