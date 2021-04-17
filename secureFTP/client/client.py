@@ -4,6 +4,7 @@ from secureFTP.protocol.header import *
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, padding, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 import secrets
@@ -22,6 +23,7 @@ class FTPClient(Communicator):
     session_id = None
     session_key = None
     server_certificate = None
+    server_sequence = None
 
     def __init__(self, address, server_address, net_path):
         super().__init__(address, net_path)
@@ -80,11 +82,56 @@ class FTPClient(Communicator):
         # Generate client sequence number
         client_sequence_bytes = secrets.token_bytes(8) + bytes(8)
 
-        # TODO: Get Username and Password from user
+        print('Username:')
+        user_name = input()
+        print('Password:')
+        password = input()
 
-        # TODO: Send client authentication message
+        auth_msg_payload = self.session_id + len(user_name).to_bytes(1, 'big') + user_name.encode('utf-8') \
+                           + len(password).to_bytes(1, 'big') + password.encode('utf-8') + client_sequence_bytes
 
-        # TODO: Wait for server response
+        # creating the cipher
+        aesgcm = AESGCM(self.session_key)
+
+        # encrypting payload
+        auth_msg_payload_enc_with_tag = aesgcm.encrypt(nonce, auth_msg_payload, None)
+
+        # send auth message to server
+        self.net_if.send_msg(self.server_address, nonce + auth_msg_payload_enc_with_tag)
+
+        # Wait for server response
+        status, msg_server_auth_resp = self.net_if.receive_msg(blocking=True)
+
+        # trying to unpack and decipher the received message
+        auth_resp = None
+        try:
+            auth_success, server_sequence = self.unpack_auth_message(msg_server_auth_resp)
+        except:
+            print(f'Message error for authentication')
+            return
+
+        if auth_success == 1:
+            print('Authentication successful')
+            self.server_sequence = server_sequence
+        elif auth_success == 0:
+            print('Authentication failed')
+        elif auth_success == 2:
+            print('User login locked, try later')
+
+    def unpack_auth_message(self, msg):
+        nonce = msg[0:16]
+        encrypted_payload_with_tag = msg[16:]
+
+        # creating the cipher
+        aesgcm = AESGCM(self.session_key)
+        payload = aesgcm.decrypt(nonce, encrypted_payload_with_tag, None)
+
+        auth_success = payload[9]
+        server_sequence = None
+        if auth_success != 0 or auth_success != 2:
+            server_sequence = payload[9:]
+
+        return auth_success, server_sequence
 
     def unpack_init_message(self, msg_server_init):
         # Msg = Address | Header | Padded SessionID | CertLen | Cert | Proof | ServerECDHPublicKey | Sign(Msg)
