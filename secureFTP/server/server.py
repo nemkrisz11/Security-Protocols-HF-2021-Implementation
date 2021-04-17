@@ -247,7 +247,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
             print(status)  # Debug
             print(received_msg)  # Debug
 
-            msg_src = received_msg[0]
+            msg_src = chr(received_msg[0])
             msg = received_msg[1:]
 
             if msg_src in self.active_sessions.keys():
