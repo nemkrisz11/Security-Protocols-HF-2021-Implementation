@@ -32,7 +32,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
     server_certificate = None
 
     DATABASE_NAME = 'secureFTP'
-    COLLECTION_NAME = 'Users'
+    COLLECTION_NAME = 'users'
     MONGODB_ADDRESS = 'mongodb://localhost:27017/'
 
     def __init__(self, address, net_path):
