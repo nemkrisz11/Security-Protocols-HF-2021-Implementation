@@ -80,7 +80,7 @@ class FTPClient(Communicator):
     def unpack_init_message(self, msg_server_init):
         # Msg = Address | Header | Padded SessionID | CertLen | Cert | Proof | ServerPublicKey | Sign(Msg)
         # Address
-        msg_src = msg_server_init[0]
+        msg_src = chr(msg_server_init[0])
         if msg_src != self.server_address:
             print("Server address mismatch detected!")
             # TODO : error handling
@@ -97,7 +97,7 @@ class FTPClient(Communicator):
 
         # SessionID
         padded_session_id = msg[idx:idx + 16]
-        unpadder = padding.ANSIX923(256).unpadder()
+        unpadder = padding.ANSIX923(128).unpadder()
         self.session_id = unpadder.update(padded_session_id) + unpadder.finalize()
         idx += 16
 

@@ -119,7 +119,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         }
 
         # Pad the SessionID
-        padder = padding.ANSIX923(256).padder()
+        padder = padding.ANSIX923(128).padder()
         padded_session_id = padder.update(session_id) + padder.finalize()
 
         # Construct the message
