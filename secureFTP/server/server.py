@@ -1,5 +1,6 @@
 from secureFTP.netsim.communicator import Communicator
 from secureFTP.protocol.header import *
+from secureFTP.protocol.commands import *
 from secureFTP.server.certification_authority import CertificationAuthority
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, padding, serialization
@@ -15,6 +16,8 @@ import sys
 import getopt
 import secrets
 import pymongo
+
+
 
 class ServerCaller(type):
     def __call__(cls, *args, **kwargs):
@@ -215,6 +218,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
                 session['ConnStatus'] = 1
                 session['SequenceClient'] = int.from_bytes(auth_msg['SequenceNumber'], 'big')
                 session['RootDirectory'] = doc['RootDirectory']
+                session['UserName'] = user_name
 
                 # generating server side sequence number
                 server_sequence_bytes = secrets.token_bytes(8) + bytes(8)
@@ -292,8 +296,119 @@ class FTPServer(Communicator, metaclass=ServerCaller):
             "SequenceNumber": sqn_num
         }
 
-    async def handle_command(self, msg_src, msg):
-        pass
+    def handle_command(self, msg_src, msg):
+        # session data
+        session = self.active_sessions[msg_src]
+        session_key = session["SessionKey"]
+        client_sequence = session["SequenceClient"]
+        server_sequence = session["SequenceServer"]
+
+        # creating the cipher
+        aesgcm = AESGCM(session_key)
+
+        # trying to unpack and decipher the received message
+        try:
+            command_msg = self.unpack_auth_message(msg, session_key)
+        except:
+            print(f'Message error for command from source: {msg_src}')
+            return
+
+        session_id = command_msg['SessionID']
+
+
+        # incrementing the client sequence
+        client_sequence += 1
+        session['SequenceClient'] = client_sequence
+
+        # incrementing the nonce
+        nonce = int.from_bytes(command_msg['Nonce'], 'big')
+        nonce += 1
+        nonce = nonce.to_bytes(16, 'big')
+
+        # building the default error message
+        resp_payload = session_id + bytes(1) + client_sequence.to_bytes(16, 'big')
+        enc_payload_with_tag = aesgcm.encrypt(nonce, resp_payload, None)
+        error_msg = nonce + enc_payload_with_tag
+
+        if session['SessionID'] != session_id:
+            print(f'SessionID mismatch during command execution for user: {session["UserName"]}')
+
+            self.net_if.send_msg(msg_src, error_msg)
+            return
+
+        if server_sequence >= command_msg['SequenceNumber']:
+            print(f'Invalid message sequence')
+
+            self.net_if.send_msg(msg_src, error_msg)
+        else:
+            session['SequenceServer'] = command_msg['SequenceNumber']
+
+        cmd = command_msg["Cmd"]
+        if cmd is Commands.MKD:
+            pass
+        elif cmd is Commands.RMD:
+            pass
+        elif cmd is Commands.GWD:
+            pass
+        elif cmd is Commands.CWD:
+            pass
+        elif cmd is Commands.LST:
+            pass
+        elif cmd is Commands.UPL:
+            pass
+        elif cmd is Commands.DNL:
+            pass
+        elif cmd is Commands.RMF:
+            pass
+        elif cmd is Commands.LGT:
+            self.command_LGT(msg_src, command_msg, session)
+
+    def command_LGT(self, msg_src, command_msg, session):
+        session_key = session["SessionKey"]
+
+        self.active_sessions.pop(msg_src, None)
+
+        # creating the cipher
+        aesgcm = AESGCM(session_key)
+
+        # incrementing the nonce
+        nonce = int.from_bytes(command_msg['Nonce'], 'big')
+        nonce += 1
+        nonce = nonce.to_bytes(16, 'big')
+
+        # building the message
+        resp_payload = session['SessionID'] + (1).to_bytes(1, 'big') + session['SequenceClient'].to_bytes(16, 'big')
+        enc_payload_with_tag = aesgcm.encrypt(nonce, resp_payload, None)
+        resp_msg = nonce + enc_payload_with_tag
+
+        self.net_if.send_msg(msg_src, resp_msg)
+
+    def unpack_command_message(self, msg, session_key):
+        # msg NONCE | EKs (SessionID | Cmd | Plen | Params | Seqserver++) | MAC
+
+        nonce = msg[0:16]
+        encrypted_payload_with_tag = msg[16:]
+
+        aesgcm = AESGCM(session_key)
+        payload = aesgcm.decrypt(nonce, encrypted_payload_with_tag, None)
+
+        session_id = payload[0:8]
+        cmd = Commands(payload[8])
+        params_len = payload[9]
+        params = payload[10:10 + params_len]
+        cmd_payload = None
+        if cmd is Commands.UPL:
+            cmd_payload = payload[10+params_len:-16].decode('utf-8')
+        sqn_num = payload[-16:]
+
+        return {
+            "Nonce": nonce,
+            "SessionID": session_id,
+            "Cmd": cmd,
+            "Params": params,
+            "Payload": cmd_payload,
+            "SequenceNumber": sqn_num
+        }
 
     def serve(self):
         while True:

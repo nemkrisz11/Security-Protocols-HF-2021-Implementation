@@ -1,6 +1,7 @@
 from secureFTP.netsim.communicator import Communicator
 from secureFTP.server.certification_authority import CertificationAuthority
 from secureFTP.protocol.header import *
+from secureFTP.protocol.commands import *
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, padding, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -8,7 +9,6 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 import secrets
-
 
 class FTPClient(Communicator):
     server_address = None
@@ -24,6 +24,11 @@ class FTPClient(Communicator):
     session_key = None
     server_certificate = None
     server_sequence = None
+
+    nonce = None
+    client_sequence = None
+
+    active_session = False
 
     def __init__(self, address, server_address, net_path):
         super().__init__(address, net_path)
@@ -72,15 +77,18 @@ class FTPClient(Communicator):
         print("Session key in client:")
         print(self.session_key)
 
+        self.active_session = True
+
         self.login()
 
     def login(self):
 
         # Generate nonce
-        nonce = secrets.token_bytes(16)
+        if not self.nonce:
+            self.nonce = secrets.token_bytes(16)
 
-        # Generate client sequence number
         client_sequence_bytes = secrets.token_bytes(8) + bytes(8)
+        self.client_sequence = int.from_bytes(client_sequence_bytes, 'big')
 
         print('Username:')
         user_name = input()
@@ -94,16 +102,16 @@ class FTPClient(Communicator):
         aesgcm = AESGCM(self.session_key)
 
         # encrypting payload
-        auth_msg_payload_enc_with_tag = aesgcm.encrypt(nonce, auth_msg_payload, None)
+        auth_msg_payload_enc_with_tag = aesgcm.encrypt(self.nonce, auth_msg_payload, None)
 
         # send auth message to server
-        self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + nonce + auth_msg_payload_enc_with_tag)
+        self.net_if.send_msg(self.server_address,
+                             bytes(self.address, 'utf-8') + self.nonce + auth_msg_payload_enc_with_tag)
 
         # Wait for server response
         status, msg_server_auth_resp = self.net_if.receive_msg(blocking=True)
 
         # trying to unpack and decipher the received message
-        auth_resp = None
         try:
             auth_success, server_sequence = self.unpack_auth_message(msg_server_auth_resp)
         except:
@@ -113,11 +121,54 @@ class FTPClient(Communicator):
         if auth_success == 1:
             print('Authentication successful')
             self.server_sequence = int.from_bytes(server_sequence, 'big')
+            self.command_loop()
         elif auth_success == 0:
             print('Authentication failed')
+            print('Retry? (y/n)')
+            retry = input()
+            if retry == 'y':
+                self.login()
+            else:
+                self.close_session()
         elif auth_success == 2:
             print('User login locked, try later')
+            self.close_session()
 
+    def command_loop(self):
+        pass
+
+    # Commands --------------------------------------------------------------------------------------------------------
+    def close_session(self):
+        # incrementing the nonce
+        nonce = int.from_bytes(self.nonce, 'big')
+        nonce += 1
+        self.nonce = nonce.to_bytes(16, 'big')
+
+        self.server_sequence += 1
+        payload = self.session_id + Commands.LGT.value.to_bytes(1, 'big') + bytes(2) + \
+                  self.server_sequence.to_bytes(16, 'big')
+
+        aesgcm = AESGCM(self.session_key)
+        enc_payload_with_tag = aesgcm.encrypt(self.nonce, payload, None)
+
+        # send close msg to server
+        self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + enc_payload_with_tag)
+
+        # Wait for server response
+        _, msg_server_close_resp = self.net_if.receive_msg(blocking=True)
+
+        try:
+            status, response_payload = self.unpack_command_message(msg_server_close_resp)
+        except Exception as ex:
+            print(f'Message error for close session {ex}')
+            return
+
+        if status == 1:
+            self.session_id = None
+            self.session_key = None
+            self.active_session = False
+
+    # Unpack methods --------------------------------------------------------------------------------------------------
     def unpack_auth_message(self, msg):
         nonce = msg[0:16]
         encrypted_payload_with_tag = msg[16:]
@@ -126,9 +177,13 @@ class FTPClient(Communicator):
         aesgcm = AESGCM(self.session_key)
         payload = aesgcm.decrypt(nonce, encrypted_payload_with_tag, None)
 
+        # update the nonce
+        self.nonce = nonce
+
+        # skip sessionID
         auth_success = payload[8]
         server_sequence = None
-        if auth_success != 0 or auth_success != 2:
+        if auth_success == 1:
             server_sequence = payload[9:]
 
         return auth_success, server_sequence
@@ -185,5 +240,29 @@ class FTPClient(Communicator):
 
         return msg[:-len(signature)], signature
 
-    def close_session(self):
-        pass
+    def unpack_command_message(self, msg):
+        nonce = msg[0:16]
+        encrypted_payload_with_tag = msg[16:]
+
+        # creating the cipher
+        aesgcm = AESGCM(self.session_key)
+        payload = aesgcm.decrypt(nonce, encrypted_payload_with_tag, None)
+
+        # skip sessionID
+        status = payload[8]
+        client_sequence = int.from_bytes(payload[-16:], 'big')
+
+        if self.client_sequence >= client_sequence:
+            raise Exception('Invalid sequence number for received message')
+
+        # update sequence
+        self.client_sequence = client_sequence
+
+        # update the nonce
+        self.nonce = nonce
+
+        response_payload = None
+        if status == 1:
+            response_payload = payload[9:-16]
+
+        return status, response_payload
