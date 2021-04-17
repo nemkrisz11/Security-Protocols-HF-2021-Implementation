@@ -46,6 +46,9 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         self.lt_server_private_key = ec.generate_private_key(ec.SECP521R1())
         self.lt_server_public_key = self.lt_server_private_key.public_key()
 
+        print("Server long term public key:")
+        print(self.lt_server_public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo))
+
         # TODO: Save public key
 
         # Serialize, encrypt and save private key
@@ -108,6 +111,9 @@ class FTPServer(Communicator, metaclass=ServerCaller):
             info=b"session_key"
         ).derive(shared_secret)
 
+        print("Session key in server:")
+        print(session_key)
+
         # Save session parameters
         self.active_sessions[msg_src] = {
             "ConnStatus": 0,
@@ -123,17 +129,24 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         padded_session_id = padder.update(session_id) + padder.finalize()
 
         # Construct the message
-        # Msg = Address | Header | Padded SessionID | CertLen | Cert | Proof | ServerPublicKey | Sign(Msg)
-        msg = bytes(self.address, 'utf-8') + init_header + padded_session_id + \
+        # Msg = Address | Header | Padded SessionID | CertLen | Cert | Proof | ServerECDHPublicKey | Sign(Msg)
+        msg = init_header + padded_session_id + \
               len(self.server_certificate).to_bytes(2, 'big') + self.server_certificate + client_proof + \
               ecdh_server_public_key.public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
 
+        print("Server sent:")
+        print(msg)  # Debug
+
         # Sign the message
         signature = self.lt_server_private_key.sign(msg, ec.ECDSA(hashes.SHA512()))
-        msg += signature
+        signed_msg = msg + signature
+
+        self.lt_server_public_key.verify(signature, msg, ec.ECDSA(hashes.SHA512()))
+
+        signed_msg = bytes(self.address, 'utf-8') + signed_msg
 
         # Send server auth message
-        self.net_if.send_msg(str(msg_src), msg)
+        self.net_if.send_msg(str(msg_src), signed_msg)
 
     async def authenticate_user(self, msg_src, msg):
         # session data

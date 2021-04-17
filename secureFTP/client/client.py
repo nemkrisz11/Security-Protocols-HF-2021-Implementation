@@ -1,7 +1,8 @@
 from secureFTP.netsim.communicator import Communicator
+from secureFTP.server.certification_authority import CertificationAuthority
 from secureFTP.protocol.header import *
 from cryptography import x509
-from cryptography.hazmat.primitives import hashes, padding
+from cryptography.hazmat.primitives import hashes, padding, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
@@ -16,6 +17,7 @@ class FTPClient(Communicator):
     ecdh_server_public_key = None
 
     lt_server_public_key = None
+    lt_ca_public_key = None
 
     session_id = None
     session_key = None
@@ -24,6 +26,7 @@ class FTPClient(Communicator):
     def __init__(self, address, server_address, net_path):
         super().__init__(address, net_path)
         self.server_address = server_address
+        self.lt_ca_public_key = CertificationAuthority().lt_ca_public_key
 
     def init_session(self):
         # Generate ephemeral ECDH keypair
@@ -44,6 +47,9 @@ class FTPClient(Communicator):
 
         msg_server_init_data, signature = self.unpack_init_message(msg_server_init)
 
+        print("Client sig:")
+        print(signature)
+
         # Verify signature, authenticate server
         self.lt_server_public_key.verify(signature, msg_server_init_data, ec.ECDSA(hashes.SHA512()))
 
@@ -60,6 +66,9 @@ class FTPClient(Communicator):
             salt=None,
             info=b"session_key"
         ).derive(shared_secret)
+
+        print("Session key in client:")
+        print(self.session_key)
 
         self.login()
 
@@ -78,7 +87,7 @@ class FTPClient(Communicator):
         # TODO: Wait for server response
 
     def unpack_init_message(self, msg_server_init):
-        # Msg = Address | Header | Padded SessionID | CertLen | Cert | Proof | ServerPublicKey | Sign(Msg)
+        # Msg = Address | Header | Padded SessionID | CertLen | Cert | Proof | ServerECDHPublicKey | Sign(Msg)
         # Address
         msg_src = chr(msg_server_init[0])
         if msg_src != self.server_address:
@@ -108,17 +117,24 @@ class FTPClient(Communicator):
         idx += server_certificate_length
 
         self.lt_server_public_key = self.server_certificate.public_key()
+        print("Client got server long term public key:")
+        print(self.lt_server_public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo))
 
         # Proof
         # server_proof = msg[idx:idx + 32]
         idx += 32
 
-        # ServerPublicKey
-        self.ecdh_server_public_key = msg[idx:idx + 158]
+        # ServerECDHPublicKey
+        ecdh_server_public_key_der = msg[idx:idx + 158]
+        self.ecdh_server_public_key = serialization.load_der_public_key(ecdh_server_public_key_der)
         idx += 158
 
         # Sign(Msg)
         signature = msg[idx:]
+
+        print("Client got:")
+        ret = msg[:-len(signature)]
+        print(msg[:-len(signature)])  # Debug
 
         return msg[:-len(signature)], signature
 
