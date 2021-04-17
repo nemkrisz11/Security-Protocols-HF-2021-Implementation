@@ -136,28 +136,60 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         self.net_if.send_msg(str(msg_src), msg)
 
     async def authenticate_user(self, msg_src, msg):
+        # session data
         session = self.active_sessions[msg_src]
+        session_key = session["SessionKey"]
 
-        auth_msg = self.unpack_auth_message(msg, session["SessionKey"])
+        # creating the cipher
+        aesgcm = AESGCM(session_key)
 
-        if session['SessionID'] != auth_msg['SessionID']:
-            # do some shit
-            # TODO: error msg
-            print('SessionID mismatch')
+        # trying to unpack and decipher the received message
+        auth_msg = None
+        try:
+            auth_msg = self.unpack_auth_message(msg, session_key)
+        except:
+            print(f'Message error for authentication from source: {msg_src}')
+            return
 
+        user_name = auth_msg['UserName']
+        session_id = auth_msg['SessionID']
+
+        # incrementing the nonce
+        nonce = int.from_bytes(auth_msg['Nonce'], 'big')
+        nonce += 1
+        nonce = nonce.to_bytes(16, 'big')
+
+        # building the default error message
+        resp_payload = session_id + bytes(1)
+        enc_payload_with_tag = aesgcm.encrypt(nonce, resp_payload, None)
+        error_msg = nonce + enc_payload_with_tag
+
+        if session['SessionID'] != session_id.hex():
+            print(f'SessionID mismatch during authentication for user: {user_name}')
+
+            self.net_if.send_msg(msg_src, error_msg)
+            return
+
+        # connecting to mongoDB
         client = pymongo.MongoClient(self.MONGODB_ADDRESS)
-
         db = client[self.DATABASE_NAME]
         collection = db[self.COLLECTION_NAME]
 
-        user_name = auth_msg['UserName']
+        # query user from database
         query = {'UserName': user_name}
         doc = collection.find_one(query)
         if doc:
+            # check if user login locked
             if doc['LockTime'] > datetime.now():
-                # auth locked msg
-                # TODO: error msg
-                print('Authentication locked for user')
+                print(f'Authentication locked for user: {user_name}')
+                # success indicator with value 2 for locked user
+                resp_payload = session_id + (2).to_bytes(1, 'big')
+
+                enc_payload_with_tag = aesgcm.encrypt(nonce, resp_payload, None)
+
+                error_msg = nonce + enc_payload_with_tag
+                self.net_if.send_msg(msg_src, error_msg)
+                return
 
             password_hash = doc['Password']
             password = auth_msg['Password']
@@ -171,10 +203,14 @@ class FTPServer(Communicator, metaclass=ServerCaller):
                 session['ConnStatus'] = 1
                 session['SequenceClient'] = auth_msg['SequenceNumber']
 
+                # generating server side sequence number
                 server_sequence_bytes = secrets.token_bytes(8) + bytes(8)
                 session['SequenceServer'] = int.from_bytes(server_sequence_bytes, 'big')
 
-                # TODO: response msg
+                resp_payload = session_id + (1).to_bytes(1, 'big') + server_sequence_bytes
+                enc_payload_with_tag = aesgcm.encrypt(nonce, resp_payload, None)
+                resp_msg = nonce + enc_payload_with_tag
+                self.net_if.send_msg(msg_src, resp_msg)
 
             except VerifyMismatchError:
                 # pass-hash mismatch
@@ -184,8 +220,11 @@ class FTPServer(Communicator, metaclass=ServerCaller):
                 else:
                     update = {'$set': {'AuthAttempts': doc['AuthAttempts'] + 1}}
                     collection.update_one(query, update)
-                # TODO: error msg
-                print('Authentication failed')
+
+                self.net_if.send_msg(msg_src, error_msg)
+
+                print(f'Authentication failed for user {user_name}, password - hash mismatch')
+
             except VerificationError:
                 # fail for other reason
                 if doc['AuthAttempts'] == 4:
@@ -194,8 +233,11 @@ class FTPServer(Communicator, metaclass=ServerCaller):
                 else:
                     update = {'$set': {'AuthAttempts': doc['AuthAttempts'] + 1}}
                     collection.update_one(query, update)
-                # TODO: error msg
-                print('Authentication failed')
+
+                self.net_if.send_msg(msg_src, error_msg)
+
+                print(f'Authentication failed for user {user_name}, other reason')
+
             except InvalidHash:
                 # invalid hash
                 if doc['AuthAttempts'] == 4:
@@ -204,11 +246,14 @@ class FTPServer(Communicator, metaclass=ServerCaller):
                 else:
                     update = {'$set': {'AuthAttempts': doc['AuthAttempts'] + 1}}
                     collection.update_one(query, update)
-                # TODO: error msg
-                print('Authentication failed')
+
+                self.net_if.send_msg(msg_src, error_msg)
+
+                print(f'Authentication failed for user {user_name}, invalid hash in DB')
+
         else:
-            # TODO: error msg
-            print('User not found')
+            self.net_if.send_msg(msg_src, error_msg)
+            print(f'User not found {user_name}')
 
     def unpack_auth_message(self, msg, session_key):
         # msg NONCE | EKs(SessionID | UNlen | Username | PWlen | Password | Seqclient) | MAC
@@ -220,9 +265,9 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         payload = aesgcm.decrypt(nonce, encrypted_payload_with_tag, None)
 
         session_id = payload[0:8]
-        user_name_len = int.from_bytes([payload[9]], 'big')
+        user_name_len = payload[9]
         user_name = payload[9:9 + user_name_len].decode('utf-8')
-        password_len = int.from_bytes([payload[9 + user_name_len]], 'big')
+        password_len = payload[9 + user_name_len]
         password = payload[-(password_len + 16):-16].decode('utf-8')
         sqn_num = payload[-16:]
 
@@ -233,8 +278,6 @@ class FTPServer(Communicator, metaclass=ServerCaller):
             "Password": password,
             "SequenceNumber": sqn_num
         }
-
-    # Do your thing
 
     async def handle_command(self, msg_src, msg):
         pass
