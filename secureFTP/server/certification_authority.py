@@ -1,5 +1,5 @@
 from cryptography import x509
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from datetime import datetime, timedelta
 
@@ -31,4 +31,4 @@ class CertificationAuthority:
             private_key=self.lt_ca_private_key, algorithm=hashes.SHA512()
         )
 
-        return signed_certificate
+        return signed_certificate.public_bytes(serialization.Encoding.PEM)

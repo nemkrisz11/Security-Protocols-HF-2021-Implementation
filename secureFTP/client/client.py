@@ -1,5 +1,6 @@
 from secureFTP.netsim.communicator import Communicator
 from secureFTP.protocol.header import *
+from cryptography import x509
 from cryptography.hazmat.primitives import hashes, padding
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -103,11 +104,10 @@ class FTPClient(Communicator):
         # CertLen | Cert
         server_certificate_length = int.from_bytes(msg[idx:idx + 2], "big")
         idx += 2
-        self.server_certificate = msg[idx:idx + server_certificate_length]
+        self.server_certificate = x509.load_pem_x509_certificate(msg[idx:idx + server_certificate_length])
         idx += server_certificate_length
 
-        # TODO: parse certificate for server long term server public key
-
+        self.lt_server_public_key = self.server_certificate.public_key()
 
         # Proof
         # server_proof = msg[idx:idx + 32]
