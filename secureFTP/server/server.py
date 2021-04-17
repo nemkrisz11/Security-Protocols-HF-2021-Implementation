@@ -1,6 +1,8 @@
 from secureFTP.netsim.communicator import Communicator
 from secureFTP.protocol.header import *
-from cryptography.hazmat.primitives import ciphers, hashes, padding, serialization
+from secureFTP.server.certification_authority import CertificationAuthority
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, padding, serialization
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -24,7 +26,6 @@ class ServerCaller(type):
 
 
 class FTPServer(Communicator, metaclass=ServerCaller):
-
     lt_server_private_key = None
     lt_server_public_key = None
     active_sessions = {}
@@ -37,8 +38,13 @@ class FTPServer(Communicator, metaclass=ServerCaller):
     def __init__(self, address, net_path):
         super().__init__(address, net_path)
 
+        # TODO: Attempt to load existing long-term keypair and certificate
+        # if ...
+
+        # else ...
         # Generate server long-term keypair
         self.lt_server_private_key = ec.generate_private_key(ec.SECP521R1())
+        self.lt_server_public_key = self.lt_server_private_key.public_key()
 
         # TODO: Save public key
 
@@ -47,11 +53,17 @@ class FTPServer(Communicator, metaclass=ServerCaller):
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.PKCS8,
             encryption_algorithm=serialization.BestAvailableEncryption(
-                b'testpassword') #  TODO: proper password
-            )
+                b'testpassword')  # TODO: proper password
+        )
         #  TODO: write encrypted private key to file
 
-        # TODO: Create server certificate
+        # Create server certificate
+        # TODO: Redo with proper certificate signing request instead of dict
+        certification_authority = CertificationAuthority()
+        self.server_certificate = certification_authority.request_certificate({
+            "CommonName": "SecureFTP Server",
+            "PublicKey": self.lt_server_public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+        })
 
     async def init_session(self, msg_src, received_msg):
         # Split message
@@ -103,8 +115,8 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         # Construct the message
         # Msg = Address | Header | Padded SessionID | CertLen | Cert | Proof | ServerPublicKey | Sign(Msg)
         msg = self.address + init_header + padded_session_id + bytes(len(self.server_certificate)) + \
-                self.server_certificate + client_proof + \
-                ecdh_server_public_key.public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+              self.server_certificate + client_proof + \
+              ecdh_server_public_key.public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
 
         # Sign the message
         signature = self.lt_server_private_key.sign(msg, ec.ECDSA(hashes.SHA512()))
@@ -199,9 +211,9 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
         session_id = payload[0:8]
         user_name_len = int.from_bytes([payload[9]], 'big')
-        user_name = payload[9:9+user_name_len].decode('utf-8')
-        password_len = int.from_bytes([payload[9+user_name_len]], 'big')
-        password = payload[-(password_len+16):-16].decode('utf-8')
+        user_name = payload[9:9 + user_name_len].decode('utf-8')
+        password_len = int.from_bytes([payload[9 + user_name_len]], 'big')
+        password = payload[-(password_len + 16):-16].decode('utf-8')
         sqn_num = payload[-16:]
 
         return {
@@ -213,8 +225,6 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         }
 
     # Do your thing
-
-
 
     async def handle_command(self, msg_src, msg):
         pass
