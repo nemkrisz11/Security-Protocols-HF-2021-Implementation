@@ -75,7 +75,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
         self.server_certificate = certification_authority.request_certificate_signing(csr_pem)
 
-    async def init_session(self, msg_src, received_msg):
+    def init_session(self, msg_src, received_msg):
         # Split message
         header = received_msg[0:16]  # 16 bytes of header
         if header != init_header:
@@ -91,7 +91,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
         # Choose a non-colliding SessionID for the session
         while True:
-            session_id = secrets.token_hex(8)
+            session_id = secrets.token_bytes(8)
             if not any(session_id in s["SessionID"] for s in self.active_sessions.values()):
                 break
 
@@ -124,8 +124,8 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
         # Construct the message
         # Msg = Address | Header | Padded SessionID | CertLen | Cert | Proof | ServerPublicKey | Sign(Msg)
-        msg = self.address + init_header + padded_session_id + bytes(len(self.server_certificate)) + \
-              self.server_certificate + client_proof + \
+        msg = bytes(self.address, 'utf-8') + init_header + padded_session_id + \
+              len(self.server_certificate).to_bytes(2, 'big') + self.server_certificate + client_proof + \
               ecdh_server_public_key.public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
 
         # Sign the message
@@ -133,7 +133,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         msg += signature
 
         # Send server auth message
-        self.net_if.send_msg(msg_src, msg)
+        self.net_if.send_msg(str(msg_src), msg)
 
     async def authenticate_user(self, msg_src, msg):
         session = self.active_sessions[msg_src]
