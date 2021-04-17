@@ -27,6 +27,7 @@ class CertificationAuthority:
         builder = builder.add_extension(
             x509.BasicConstraints(ca=False, path_length=None), critical=True
         )
+        builder = builder.public_key(self.lt_ca_private_key.public_key())
         signed_certificate = builder.sign(
             private_key=self.lt_ca_private_key, algorithm=hashes.SHA512()
         )
