@@ -16,7 +16,6 @@ import getopt
 import secrets
 import pymongo
 
-
 class ServerCaller(type):
     def __call__(cls, *args, **kwargs):
         """ Called when FTPServer constructor is called """
@@ -148,7 +147,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         # Send server auth message
         self.net_if.send_msg(str(msg_src), signed_msg)
 
-    async def authenticate_user(self, msg_src, msg):
+    def authenticate_user(self, msg_src, msg):
         # session data
         session = self.active_sessions[msg_src]
         session_key = session["SessionKey"]
@@ -177,7 +176,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         enc_payload_with_tag = aesgcm.encrypt(nonce, resp_payload, None)
         error_msg = nonce + enc_payload_with_tag
 
-        if session['SessionID'] != session_id.hex():
+        if session['SessionID'] != session_id:
             print(f'SessionID mismatch during authentication for user: {user_name}')
 
             self.net_if.send_msg(msg_src, error_msg)
@@ -214,7 +213,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
                 print(f'{user_name} successfully authenticated ')
                 session['ConnStatus'] = 1
-                session['SequenceClient'] = auth_msg['SequenceNumber']
+                session['SequenceClient'] = int.from_bytes(auth_msg['SequenceNumber'], 'big')
                 session['RootDirectory'] = doc['RootDirectory']
 
                 # generating server side sequence number
@@ -279,7 +278,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         payload = aesgcm.decrypt(nonce, encrypted_payload_with_tag, None)
 
         session_id = payload[0:8]
-        user_name_len = payload[9]
+        user_name_len = payload[8]
         user_name = payload[9:9 + user_name_len].decode('utf-8')
         password_len = payload[9 + user_name_len]
         password = payload[-(password_len + 16):-16].decode('utf-8')

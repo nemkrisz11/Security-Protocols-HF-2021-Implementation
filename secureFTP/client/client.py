@@ -97,7 +97,7 @@ class FTPClient(Communicator):
         auth_msg_payload_enc_with_tag = aesgcm.encrypt(nonce, auth_msg_payload, None)
 
         # send auth message to server
-        self.net_if.send_msg(self.server_address, nonce + auth_msg_payload_enc_with_tag)
+        self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + nonce + auth_msg_payload_enc_with_tag)
 
         # Wait for server response
         status, msg_server_auth_resp = self.net_if.receive_msg(blocking=True)
@@ -112,7 +112,7 @@ class FTPClient(Communicator):
 
         if auth_success == 1:
             print('Authentication successful')
-            self.server_sequence = server_sequence
+            self.server_sequence = int.from_bytes(server_sequence, 'big')
         elif auth_success == 0:
             print('Authentication failed')
         elif auth_success == 2:
@@ -126,7 +126,7 @@ class FTPClient(Communicator):
         aesgcm = AESGCM(self.session_key)
         payload = aesgcm.decrypt(nonce, encrypted_payload_with_tag, None)
 
-        auth_success = payload[9]
+        auth_success = payload[8]
         server_sequence = None
         if auth_success != 0 or auth_success != 2:
             server_sequence = payload[9:]
