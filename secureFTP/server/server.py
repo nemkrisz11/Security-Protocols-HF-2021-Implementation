@@ -58,12 +58,22 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         #  TODO: write encrypted private key to file
 
         # Create server certificate
-        # TODO: Redo with proper certificate signing request instead of dict
         certification_authority = CertificationAuthority()
-        self.server_certificate = certification_authority.request_certificate({
-            "CommonName": "SecureFTP Server",
-            "PublicKey": self.lt_server_public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
-        })
+
+        csr_builder = x509.CertificateSigningRequestBuilder()
+        csr_builder = csr_builder.subject_name(x509.Name([
+            x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, u'SecureFTP Server')
+        ]))
+        csr_builder = csr_builder.add_extension(
+            x509.BasicConstraints(ca=False, path_length=None), critical=True
+        )
+        csr_builder = csr_builder.sign(
+            self.lt_server_private_key, hashes.SHA512()
+        )
+
+        csr_pem = csr_builder.public_bytes(serialization.Encoding.PEM)
+
+        self.server_certificate = certification_authority.request_certificate_signing(csr_pem)
 
     async def init_session(self, msg_src, received_msg):
         # Split message
