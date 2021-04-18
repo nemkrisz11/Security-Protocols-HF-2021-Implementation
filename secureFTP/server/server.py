@@ -166,6 +166,10 @@ class FTPServer(Communicator, metaclass=ServerCaller):
             print(f'Message error for authentication from source: {msg_src}')
             return
 
+        if auth_msg['Close']:
+            self.command_LGT(msg_src, None, session, False)
+            return
+
         user_name = auth_msg['UserName']
         session_id = auth_msg['SessionID']
 
@@ -224,6 +228,9 @@ class FTPServer(Communicator, metaclass=ServerCaller):
                 server_sequence_bytes = secrets.token_bytes(8) + bytes(8)
                 session['SequenceServer'] = int.from_bytes(server_sequence_bytes, 'big')
 
+                update = {'$set': {'AuthAttempts': 0}}
+                collection.update_one(query, update)
+
                 resp_payload = session_id + (1).to_bytes(1, 'big') + server_sequence_bytes
                 enc_payload_with_tag = aesgcm.encrypt(nonce, resp_payload, None)
                 resp_msg = nonce + enc_payload_with_tag
@@ -281,15 +288,17 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         aesgcm = AESGCM(session_key)
         payload = aesgcm.decrypt(nonce, encrypted_payload_with_tag, None)
 
-        session_id = payload[0:8]
-        user_name_len = payload[8]
-        user_name = payload[9:9 + user_name_len].decode('utf-8')
-        password_len = payload[9 + user_name_len]
+        close = payload[0]
+        session_id = payload[1:9]
+        user_name_len = payload[9]
+        user_name = payload[10:10 + user_name_len].decode('utf-8')
+        password_len = payload[10 + user_name_len]
         password = payload[-(password_len + 16):-16].decode('utf-8')
         sqn_num = payload[-16:]
 
         return {
             "Nonce": nonce,
+            "Close": close,
             "SessionID": session_id,
             "UserName": user_name,
             "Password": password,
@@ -361,27 +370,28 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         elif cmd is Commands.RMF:
             pass
         elif cmd is Commands.LGT:
-            self.command_LGT(msg_src, command_msg, session)
+            self.command_LGT(msg_src, command_msg, session, True)
 
-    def command_LGT(self, msg_src, command_msg, session):
+    def command_LGT(self, msg_src, command_msg, session, send_response):
         session_key = session["SessionKey"]
 
         self.active_sessions.pop(msg_src, None)
 
-        # creating the cipher
-        aesgcm = AESGCM(session_key)
+        if send_response:
+            # creating the cipher
+            aesgcm = AESGCM(session_key)
 
-        # incrementing the nonce
-        nonce = int.from_bytes(command_msg['Nonce'], 'big')
-        nonce += 1
-        nonce = nonce.to_bytes(16, 'big')
+            # incrementing the nonce
+            nonce = int.from_bytes(command_msg['Nonce'], 'big')
+            nonce += 1
+            nonce = nonce.to_bytes(16, 'big')
 
-        # building the message
-        resp_payload = session['SessionID'] + (1).to_bytes(1, 'big') + session['SequenceClient'].to_bytes(16, 'big')
-        enc_payload_with_tag = aesgcm.encrypt(nonce, resp_payload, None)
-        resp_msg = nonce + enc_payload_with_tag
+            # building the message
+            resp_payload = session['SessionID'] + (1).to_bytes(1, 'big') + session['SequenceClient'].to_bytes(16, 'big')
+            enc_payload_with_tag = aesgcm.encrypt(nonce, resp_payload, None)
+            resp_msg = nonce + enc_payload_with_tag
 
-        self.net_if.send_msg(msg_src, resp_msg)
+            self.net_if.send_msg(msg_src, resp_msg)
 
     def unpack_command_message(self, msg, session_key):
         # msg NONCE | EKs (SessionID | Cmd | Plen | Params | Seqserver++) | MAC

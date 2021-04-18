@@ -82,21 +82,63 @@ class FTPClient(Communicator):
         self.login()
 
     def login(self):
+        authenticated = False
+        close = False
+        while not close and not authenticated:
+            # Generate nonce
+            if not self.nonce:
+                self.nonce = secrets.token_bytes(16)
 
-        # Generate nonce
-        if not self.nonce:
-            self.nonce = secrets.token_bytes(16)
+            client_sequence_bytes = secrets.token_bytes(8) + bytes(8)
+            self.client_sequence = int.from_bytes(client_sequence_bytes, 'big')
 
-        client_sequence_bytes = secrets.token_bytes(8) + bytes(8)
-        self.client_sequence = int.from_bytes(client_sequence_bytes, 'big')
+            print('Username:')
+            user_name = input()
+            print('Password:')
+            password = input()
 
-        print('Username:')
-        user_name = input()
-        print('Password:')
-        password = input()
+            auth_msg_payload = bytes(1) + self.session_id + len(user_name).to_bytes(1, 'big') + user_name.encode('utf-8') \
+                               + len(password).to_bytes(1, 'big') + password.encode('utf-8') + client_sequence_bytes
 
-        auth_msg_payload = self.session_id + len(user_name).to_bytes(1, 'big') + user_name.encode('utf-8') \
-                           + len(password).to_bytes(1, 'big') + password.encode('utf-8') + client_sequence_bytes
+            # creating the cipher
+            aesgcm = AESGCM(self.session_key)
+
+            # encrypting payload
+            auth_msg_payload_enc_with_tag = aesgcm.encrypt(self.nonce, auth_msg_payload, None)
+
+            # send auth message to server
+            self.net_if.send_msg(self.server_address,
+                                 bytes(self.address, 'utf-8') + self.nonce + auth_msg_payload_enc_with_tag)
+
+            # Wait for server response
+            status, msg_server_auth_resp = self.net_if.receive_msg(blocking=True)
+
+            # trying to unpack and decipher the received message
+            try:
+                auth_success, server_sequence = self.unpack_auth_message(msg_server_auth_resp)
+            except:
+                print(f'Message error for authentication')
+                return
+
+            if auth_success == 1:
+                print('Authentication successful')
+                self.server_sequence = int.from_bytes(server_sequence, 'big')
+                authenticated = True
+                self.command_loop()
+            elif auth_success == 0:
+                print('Authentication failed')
+                print('Retry? (y/n)')
+                retry = input()
+                if retry != 'y':
+                    close = True
+                    self.close_session()
+            elif auth_success == 2:
+                print('User login locked, try later')
+                close = True
+                self.close_session()
+
+    def close_session(self):
+        auth_msg_payload = (1).to_bytes(1, 'big') + self.session_id + bytes(1) + bytes(1) + bytes(8)
 
         # creating the cipher
         aesgcm = AESGCM(self.session_key)
@@ -108,37 +150,12 @@ class FTPClient(Communicator):
         self.net_if.send_msg(self.server_address,
                              bytes(self.address, 'utf-8') + self.nonce + auth_msg_payload_enc_with_tag)
 
-        # Wait for server response
-        status, msg_server_auth_resp = self.net_if.receive_msg(blocking=True)
-
-        # trying to unpack and decipher the received message
-        try:
-            auth_success, server_sequence = self.unpack_auth_message(msg_server_auth_resp)
-        except:
-            print(f'Message error for authentication')
-            return
-
-        if auth_success == 1:
-            print('Authentication successful')
-            self.server_sequence = int.from_bytes(server_sequence, 'big')
-            self.command_loop()
-        elif auth_success == 0:
-            print('Authentication failed')
-            print('Retry? (y/n)')
-            retry = input()
-            if retry == 'y':
-                self.login()
-            else:
-                self.close_session()
-        elif auth_success == 2:
-            print('User login locked, try later')
-            self.close_session()
-
     def command_loop(self):
-        pass
+        while self.active_session:
+            pass
 
     # Commands --------------------------------------------------------------------------------------------------------
-    def close_session(self):
+    def lgt_command(self):
         # incrementing the nonce
         nonce = int.from_bytes(self.nonce, 'big')
         nonce += 1
