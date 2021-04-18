@@ -424,8 +424,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         return 1
 
     def command_GWD(self, session):
-        # TODO
-        return 1
+        return b'\x01', session['CurrentDirectory']
 
     def command_CWD(self, session, params):
         # TODO
@@ -434,9 +433,9 @@ class FTPServer(Communicator, metaclass=ServerCaller):
     def command_LST(self, session):
         try:
             path = os.fsencode(self.users_dir + session['RootDirectory'] + session['CurrentDirectory'])
-            return b'\x01' + b','.join(os.listdir(path))
+            return b'\x01', b','.join(os.listdir(path))
         except:
-            return b'\x00' + b''
+            return b'\x00', b''
 
     def command_UPL(self, session, params):
         # TODO
@@ -452,7 +451,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
     def command_LGT(self, msg_src):
         self.active_sessions.pop(msg_src, None)
-        return b'\x00' + b''
+        return b'\x00', b''
 
     # Unpack methods --------------------------------------------------------------------------------------------------
     def unpack_auth_message(self, msg, session_key):
