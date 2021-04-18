@@ -452,7 +452,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
     def command_LGT(self, msg_src):
         self.active_sessions.pop(msg_src, None)
-        return 1
+        return b'\x00' + b''
 
     # Unpack methods --------------------------------------------------------------------------------------------------
     def unpack_auth_message(self, msg, session_key):
