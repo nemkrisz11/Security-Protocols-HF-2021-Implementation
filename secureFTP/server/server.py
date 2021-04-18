@@ -18,7 +18,6 @@ import secrets
 import pymongo
 
 
-
 class ServerCaller(type):
     def __call__(cls, *args, **kwargs):
         """ Called when FTPServer constructor is called """
@@ -37,30 +36,46 @@ class FTPServer(Communicator, metaclass=ServerCaller):
     COLLECTION_NAME = 'users'
     MONGODB_ADDRESS = 'mongodb://localhost:27017/'
 
-    def __init__(self, address, net_path):
+    users_dir = None
+
+    def __init__(self, address, net_path, users_dir):
         super().__init__(address, net_path)
 
-        # TODO: Attempt to load existing long-term keypair and certificate
-        # if ...
+        self.users_dir = users_dir
 
-        # else ...
-        # Generate server long-term keypair
-        self.lt_server_private_key = ec.generate_private_key(ec.SECP521R1())
-        self.lt_server_public_key = self.lt_server_private_key.public_key()
+        server_password = input()
 
-        print("Server long term public key:")
-        print(self.lt_server_public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo))
+        # Attempt to load existing long-term keypair and certificate
+        try:
+            with open("./server_private_key.pem", "rb") as private_key_file:
+                self.lt_server_private_key = serialization.load_pem_private_key(
+                    private_key_file.read(), password=server_password.encode('utf-8'))
+            with open("./server_public_key.pem", "rb") as public_key_file:
+                self.lt_server_public_key = serialization.load_pem_public_key(public_key_file.read())
 
-        # TODO: Save public key
+        except FileNotFoundError:
 
-        # Serialize, encrypt and save private key
-        ser_lt_server_private_key = self.lt_server_private_key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.BestAvailableEncryption(
-                b'testpassword')  # TODO: proper password
-        )
-        #  TODO: write encrypted private key to file
+            # Generate server long-term keypair
+            self.lt_server_private_key = ec.generate_private_key(ec.SECP521R1())
+            self.lt_server_public_key = self.lt_server_private_key.public_key()
+
+            print("Server long term public key:")
+            print(self.lt_server_public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo))
+
+            with open("./server_public_key.pem", "wb") as public_key_file:
+                public_key_file.write(
+                    self.lt_server_public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+                )
+
+            # Serialize, encrypt and save private key
+            ser_lt_server_private_key = self.lt_server_private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.BestAvailableEncryption(
+                    server_password.encode('utf-8'))
+            )
+            with open("./server_private_key.pem", "wb") as private_key_file:
+                private_key_file.write(ser_lt_server_private_key)
 
         # Create server certificate
         certification_authority = CertificationAuthority()
@@ -80,12 +95,43 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
         self.server_certificate = certification_authority.request_certificate_signing(csr_pem)
 
+    def serve(self):
+        while True:
+            status, received_msg = self.net_if.receive_msg(blocking=True)
+
+            print("Server got message")  # Debug
+            print(status)  # Debug
+            print(received_msg)  # Debug
+
+            msg_src = chr(received_msg[0])
+            msg = received_msg[1:]
+
+            if msg_src in self.active_sessions.keys():
+                # Existing connection, look up parameters
+                session = self.active_sessions[msg_src]
+
+                if session["ConnStatus"] == 0:
+                    # Attempt user authentication
+                    self.authenticate_user(msg_src, msg)
+
+                elif session["ConnStatus"] == 1:
+                    # Authenticated user, try to parse command
+                    self.handle_command(msg_src, msg)
+
+                continue
+
+            else:
+                # New session init
+                self.init_session(msg_src, msg)
+
+                continue
+
     def init_session(self, msg_src, received_msg):
         # Split message
         header = received_msg[0:16]  # 16 bytes of header
         if header != init_header:
             print("Header mismatch detected!")
-            # TODO : error handling
+            return
 
         client_proof = received_msg[16:48]  # 32 bytes of client proof
         ecdh_client_public_key = serialization.load_der_public_key(received_msg[48:])
@@ -151,14 +197,14 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         self.net_if.send_msg(str(msg_src), signed_msg)
 
     def authenticate_user(self, msg_src, msg):
-        # session data
+        # Session data
         session = self.active_sessions[msg_src]
         session_key = session["SessionKey"]
 
-        # creating the cipher
+        # Creating the cipher
         aesgcm = AESGCM(session_key)
 
-        # trying to unpack and decipher the received message
+        # Trying to unpack and decipher the received message
         auth_msg = None
         try:
             auth_msg = self.unpack_auth_message(msg, session_key)
@@ -167,18 +213,18 @@ class FTPServer(Communicator, metaclass=ServerCaller):
             return
 
         if auth_msg['Close']:
-            self.command_LGT(msg_src, None, session, False)
+            self.command_LGT(msg_src)
             return
 
         user_name = auth_msg['UserName']
         session_id = auth_msg['SessionID']
 
-        # incrementing the nonce
+        # Increment the nonce
         nonce = int.from_bytes(auth_msg['Nonce'], 'big')
         nonce += 1
         nonce = nonce.to_bytes(16, 'big')
 
-        # building the default error message
+        # Building the default error message
         resp_payload = session_id + bytes(1)
         enc_payload_with_tag = aesgcm.encrypt(nonce, resp_payload, None)
         error_msg = nonce + enc_payload_with_tag
@@ -189,12 +235,12 @@ class FTPServer(Communicator, metaclass=ServerCaller):
             self.net_if.send_msg(msg_src, error_msg)
             return
 
-        # connecting to mongoDB
+        # Connecting to mongoDB
         client = pymongo.MongoClient(self.MONGODB_ADDRESS)
         db = client[self.DATABASE_NAME]
         collection = db[self.COLLECTION_NAME]
 
-        # query user from database
+        # Query user from database
         query = {'UserName': user_name}
         doc = collection.find_one(query)
         if doc:
@@ -222,6 +268,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
                 session['ConnStatus'] = 1
                 session['SequenceClient'] = int.from_bytes(auth_msg['SequenceNumber'], 'big')
                 session['RootDirectory'] = doc['RootDirectory']
+                session['CurrentDirectory'] = '/'
                 session['UserName'] = user_name
 
                 # generating server side sequence number
@@ -237,7 +284,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
                 self.net_if.send_msg(msg_src, resp_msg)
 
             except VerifyMismatchError:
-                # pass-hash mismatch
+                # Pass-hash mismatch
                 if doc['AuthAttempts'] == 4:
                     update = {'$set': {'AuthAttempts': 0, 'LockTime': datetime.now() + timedelta(minutes=10)}}
                     collection.update_one(query, update)
@@ -250,7 +297,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
                 print(f'Authentication failed for user {user_name}, password - hash mismatch')
 
             except VerificationError:
-                # fail for other reason
+                # Fail for other reason
                 if doc['AuthAttempts'] == 4:
                     update = {'$set': {'AuthAttempts': 0, 'LockTime': datetime.now() + timedelta(minutes=10)}}
                     collection.update_one(query, update)
@@ -263,7 +310,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
                 print(f'Authentication failed for user {user_name}, other reason')
 
             except InvalidHash:
-                # invalid hash
+                # Invalid hash
                 if doc['AuthAttempts'] == 4:
                     update = {'$set': {'AuthAttempts': 0, 'LockTime': datetime.now() + timedelta(minutes=10)}}
                     collection.update_one(query, update)
@@ -279,6 +326,135 @@ class FTPServer(Communicator, metaclass=ServerCaller):
             self.net_if.send_msg(msg_src, error_msg)
             print(f'User not found {user_name}')
 
+    def handle_command(self, msg_src, msg):
+        # Session data
+        session = self.active_sessions[msg_src]
+        session_key = session["SessionKey"]
+        client_sequence = session["SequenceClient"]
+        server_sequence = session["SequenceServer"]
+
+        # Creating the cipher
+        aesgcm = AESGCM(session_key)
+
+        # Trying to unpack and decipher the received message
+        try:
+            command_msg = self.unpack_auth_message(msg, session_key)
+        except:
+            print(f'Message error for command from source: {msg_src}')
+            return
+
+        session_id = command_msg['SessionID']
+
+        # Increment the client sequence
+        client_sequence += 1
+        session['SequenceClient'] = client_sequence
+
+        # Increment the nonce
+        nonce = int.from_bytes(command_msg['Nonce'], 'big')
+        nonce += 1
+        nonce = nonce.to_bytes(16, 'big')
+
+        # Building the default error message
+        resp_payload = session_id + b'\x00' + client_sequence.to_bytes(16, 'big')
+        enc_payload_with_tag = aesgcm.encrypt(nonce, resp_payload, None)
+        error_msg = nonce + enc_payload_with_tag
+
+        if session['SessionID'] != session_id:
+            print(f'SessionID mismatch during command execution for user: {session["UserName"]}')
+
+            self.net_if.send_msg(msg_src, error_msg)
+            return
+
+        if server_sequence >= command_msg['SequenceNumber']:
+            print(f'Invalid message sequence')
+
+            self.net_if.send_msg(msg_src, error_msg)
+        else:
+            session['SequenceServer'] = command_msg['SequenceNumber']
+
+        # Execute command
+
+        cmd = command_msg["Cmd"]
+        if cmd is Commands.MKD:
+            response, response_payload = self.command_MKD(session, command_msg["Params"])
+        elif cmd is Commands.RMD:
+            response, response_payload = self.command_RMD(session, command_msg["Params"])
+        elif cmd is Commands.GWD:
+            response, response_payload = self.command_GWD(session)
+        elif cmd is Commands.CWD:
+            response, response_payload = self.command_CWD(session, command_msg["Params"])
+        elif cmd is Commands.LST:
+            response, response_payload = self.command_LST(session)
+        elif cmd is Commands.UPL:
+            response, response_payload = self.command_UPL(session, command_msg["Params"])
+        elif cmd is Commands.DNL:
+            response, response_payload = self.command_DNL(session, command_msg["Params"])
+        elif cmd is Commands.RMF:
+            response, response_payload = self.command_RMF(session, command_msg["Params"])
+        elif cmd is Commands.LGT:
+            response, response_payload = self.command_LGT(msg_src)
+        else:
+            response = b'\x00'
+            response_payload = b''
+
+        # Sending a response message
+        # Creating the cipher
+        aesgcm = AESGCM(session_key)
+
+        # Increment the nonce
+        nonce = int.from_bytes(command_msg['Nonce'], 'big')
+        nonce += 1
+        nonce = nonce.to_bytes(16, 'big')
+
+        # Building the message
+        msg = session['SessionID'] + response + session['SequenceClient'].to_bytes(16, 'big') + response_payload
+        enc_payload_with_tag = aesgcm.encrypt(nonce, msg, None)
+        enc_msg = nonce + enc_payload_with_tag
+
+        self.net_if.send_msg(msg_src, enc_msg)
+
+    # Commands --------------------------------------------------------------------------------------------------------
+    def command_MKD(self, session, params):
+        # TODO
+        # Note: commas are forbidden!
+        return 1
+
+    def command_RMD(self, session, params):
+        # TODO
+        return 1
+
+    def command_GWD(self, session):
+        # TODO
+        return 1
+
+    def command_CWD(self, session, params):
+        # TODO
+        return 1
+
+    def command_LST(self, session):
+        try:
+            path = os.fsencode(self.users_dir + session['RootDirectory'] + session['CurrentDirectory'])
+            return b'\x01' + b','.join(os.listdir(path))
+        except:
+            return b'\x00' + b''
+
+    def command_UPL(self, session, params):
+        # TODO
+        return 1
+
+    def command_DNL(self, session, params):
+        # TODO
+        return 1
+
+    def command_RMF(self, session, params):
+        # TODO
+        return 1
+
+    def command_LGT(self, msg_src):
+        self.active_sessions.pop(msg_src, None)
+        return 1
+
+    # Unpack methods --------------------------------------------------------------------------------------------------
     def unpack_auth_message(self, msg, session_key):
         # msg NONCE | EKs(SessionID | UNlen | Username | PWlen | Password | Seqclient) | MAC
 
@@ -305,94 +481,6 @@ class FTPServer(Communicator, metaclass=ServerCaller):
             "SequenceNumber": sqn_num
         }
 
-    def handle_command(self, msg_src, msg):
-        # session data
-        session = self.active_sessions[msg_src]
-        session_key = session["SessionKey"]
-        client_sequence = session["SequenceClient"]
-        server_sequence = session["SequenceServer"]
-
-        # creating the cipher
-        aesgcm = AESGCM(session_key)
-
-        # trying to unpack and decipher the received message
-        try:
-            command_msg = self.unpack_auth_message(msg, session_key)
-        except:
-            print(f'Message error for command from source: {msg_src}')
-            return
-
-        session_id = command_msg['SessionID']
-
-
-        # incrementing the client sequence
-        client_sequence += 1
-        session['SequenceClient'] = client_sequence
-
-        # incrementing the nonce
-        nonce = int.from_bytes(command_msg['Nonce'], 'big')
-        nonce += 1
-        nonce = nonce.to_bytes(16, 'big')
-
-        # building the default error message
-        resp_payload = session_id + bytes(1) + client_sequence.to_bytes(16, 'big')
-        enc_payload_with_tag = aesgcm.encrypt(nonce, resp_payload, None)
-        error_msg = nonce + enc_payload_with_tag
-
-        if session['SessionID'] != session_id:
-            print(f'SessionID mismatch during command execution for user: {session["UserName"]}')
-
-            self.net_if.send_msg(msg_src, error_msg)
-            return
-
-        if server_sequence >= command_msg['SequenceNumber']:
-            print(f'Invalid message sequence')
-
-            self.net_if.send_msg(msg_src, error_msg)
-        else:
-            session['SequenceServer'] = command_msg['SequenceNumber']
-
-        cmd = command_msg["Cmd"]
-        if cmd is Commands.MKD:
-            pass
-        elif cmd is Commands.RMD:
-            pass
-        elif cmd is Commands.GWD:
-            pass
-        elif cmd is Commands.CWD:
-            pass
-        elif cmd is Commands.LST:
-            pass
-        elif cmd is Commands.UPL:
-            pass
-        elif cmd is Commands.DNL:
-            pass
-        elif cmd is Commands.RMF:
-            pass
-        elif cmd is Commands.LGT:
-            self.command_LGT(msg_src, command_msg, session, True)
-
-    def command_LGT(self, msg_src, command_msg, session, send_response):
-        session_key = session["SessionKey"]
-
-        self.active_sessions.pop(msg_src, None)
-
-        if send_response:
-            # creating the cipher
-            aesgcm = AESGCM(session_key)
-
-            # incrementing the nonce
-            nonce = int.from_bytes(command_msg['Nonce'], 'big')
-            nonce += 1
-            nonce = nonce.to_bytes(16, 'big')
-
-            # building the message
-            resp_payload = session['SessionID'] + (1).to_bytes(1, 'big') + session['SequenceClient'].to_bytes(16, 'big')
-            enc_payload_with_tag = aesgcm.encrypt(nonce, resp_payload, None)
-            resp_msg = nonce + enc_payload_with_tag
-
-            self.net_if.send_msg(msg_src, resp_msg)
-
     def unpack_command_message(self, msg, session_key):
         # msg NONCE | EKs (SessionID | Cmd | Plen | Params | Seqserver++) | MAC
 
@@ -408,7 +496,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         params = payload[10:10 + params_len]
         cmd_payload = None
         if cmd is Commands.UPL:
-            cmd_payload = payload[10+params_len:-16].decode('utf-8')
+            cmd_payload = payload[10 + params_len:-16].decode('utf-8')
         sqn_num = payload[-16:]
 
         return {
@@ -420,47 +508,17 @@ class FTPServer(Communicator, metaclass=ServerCaller):
             "SequenceNumber": sqn_num
         }
 
-    def serve(self):
-        while True:
-            status, received_msg = self.net_if.receive_msg(blocking=True)
-
-            print("Server got message")  # Debug
-            print(status)  # Debug
-            print(received_msg)  # Debug
-
-            msg_src = chr(received_msg[0])
-            msg = received_msg[1:]
-
-            if msg_src in self.active_sessions.keys():
-                # Existing connection, look up parameters
-                session = self.active_sessions[msg_src]
-
-                if session["ConnStatus"] == 0:
-                    # Attempt user authentication
-                    self.authenticate_user(msg_src, msg)
-
-                elif session["ConnStatus"] == 1:
-                    # Authenticated user, try to parse command
-                    self.handle_command(msg_src, msg)
-
-                continue
-
-            else:
-                # New session init
-                self.init_session(msg_src, msg)
-
-                continue
-
 
 if __name__ == "__main__":
     try:
-        opts, args = getopt.getopt(sys.argv[1:], shortopts='hp:a:', longopts=['help', 'path=', 'addr='])
+        opts, args = getopt.getopt(sys.argv[1:], shortopts='hp:a:u:', longopts=['help', 'path=', 'addr=', 'users='])
     except getopt.GetoptError:
         print("Usage: python server.py -p <network path> -a <address>")
         sys.exit(1)
 
     net_path = "../network/"
     address = "A"
+    users_dir = "./users/"
 
     for opt, arg in opts:
         if opt == '-h' or opt == '--help':
@@ -470,5 +528,7 @@ if __name__ == "__main__":
             net_path = arg
         elif opt == '-a' or opt == '--addr':
             address = arg
+        elif opt == '-u' or opt == '--users':
+            users_dir = arg
 
-    server = FTPServer(address, net_path)
+    server = FTPServer(address, net_path, users_dir)

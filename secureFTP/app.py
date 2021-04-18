@@ -10,7 +10,6 @@ import sys
 def app_main(net_path):
     # Create client_1 instance
     client_1 = FTPClient(address="C", server_address="A", net_path=net_path)
-
     client_1.init_session()
 
     # Create client_2 instance

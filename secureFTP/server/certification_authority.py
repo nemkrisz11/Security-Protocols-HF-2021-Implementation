@@ -12,17 +12,19 @@ class CertificationAuthority:
     def __init__(self):
         try:
             with open("./ca_private_key.pem", "rb") as private_key_file:
-                self.lt_ca_private_key = serialization.load_pem_private_key(private_key_file.read(), password=b"testpassword")
+                self.lt_ca_private_key = serialization.load_pem_private_key(
+                    private_key_file.read(), password=b"Example_CA_password")
             with open("./ca_public_key.pem", "rb") as public_key_file:
                 self.lt_ca_public_key = serialization.load_pem_public_key(public_key_file.read())
+
         except FileNotFoundError:
             self.lt_ca_private_key = ec.generate_private_key(ec.SECP521R1())
             self.lt_ca_public_key = self.lt_ca_private_key.public_key()
 
             with open("./ca_private_key.pem", "wb") as private_key_file:
                 private_key_file.write(self.lt_ca_private_key.private_bytes(
-                    Encoding.PEM, PrivateFormat.PKCS8, serialization.BestAvailableEncryption(b"testpassword"))
-                ) #  TODO: Proper password
+                    Encoding.PEM, PrivateFormat.PKCS8, serialization.BestAvailableEncryption(b"Example_CA_password"))
+                )
             with open("./ca_public_key.pem", "wb") as public_key_file:
                 public_key_file.write(self.lt_ca_public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo))
 

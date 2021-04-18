@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 import secrets
 
+
 class FTPClient(Communicator):
     server_address = None
 
@@ -52,12 +53,20 @@ class FTPClient(Communicator):
         # Wait for server response
         status, msg_server_init = self.net_if.receive_msg(blocking=True)
 
-        msg_server_init_data, signature = self.unpack_init_message(msg_server_init)
+        try:
+            msg_server_init_data, signature, server_proof = self.unpack_init_message(msg_server_init)
+        except:
+            print(f'Message error for session initiation')
+            return
 
         print("Client sig:")
         print(signature)
 
-        # Verify signature, authenticate server
+        # Verify signature and proof, authenticate server
+        if client_random != server_proof:
+            print("Invalid proof received, closing connection!")
+            return
+
         self.lt_server_public_key.verify(signature, msg_server_init_data, ec.ECDSA(hashes.SHA512()))
 
         # Construct session key
@@ -97,23 +106,25 @@ class FTPClient(Communicator):
             print('Password:')
             password = input()
 
-            auth_msg_payload = bytes(1) + self.session_id + len(user_name).to_bytes(1, 'big') + user_name.encode('utf-8') \
-                               + len(password).to_bytes(1, 'big') + password.encode('utf-8') + client_sequence_bytes
+            auth_msg_payload = bytes(1) + self.session_id + \
+                               len(user_name).to_bytes(1, 'big') + user_name.encode('utf-8') + \
+                               len(password).to_bytes(1, 'big') + password.encode('utf-8') + \
+                               client_sequence_bytes
 
-            # creating the cipher
+            # Creating the cipher
             aesgcm = AESGCM(self.session_key)
 
-            # encrypting payload
+            # Encrypting payload
             auth_msg_payload_enc_with_tag = aesgcm.encrypt(self.nonce, auth_msg_payload, None)
 
-            # send auth message to server
+            # Send auth message to server
             self.net_if.send_msg(self.server_address,
                                  bytes(self.address, 'utf-8') + self.nonce + auth_msg_payload_enc_with_tag)
 
             # Wait for server response
             status, msg_server_auth_resp = self.net_if.receive_msg(blocking=True)
 
-            # trying to unpack and decipher the received message
+            # Trying to unpack and decipher the received message
             try:
                 auth_success, server_sequence = self.unpack_auth_message(msg_server_auth_resp)
             except:
@@ -140,13 +151,13 @@ class FTPClient(Communicator):
     def close_session(self):
         auth_msg_payload = (1).to_bytes(1, 'big') + self.session_id + bytes(1) + bytes(1) + bytes(8)
 
-        # creating the cipher
+        # Creating the cipher
         aesgcm = AESGCM(self.session_key)
 
-        # encrypting payload
+        # Encrypting payload
         auth_msg_payload_enc_with_tag = aesgcm.encrypt(self.nonce, auth_msg_payload, None)
 
-        # send auth message to server
+        # Send auth message to server
         self.net_if.send_msg(self.server_address,
                              bytes(self.address, 'utf-8') + self.nonce + auth_msg_payload_enc_with_tag)
 
@@ -155,8 +166,8 @@ class FTPClient(Communicator):
             pass
 
     # Commands --------------------------------------------------------------------------------------------------------
-    def lgt_command(self):
-        # incrementing the nonce
+    def command_LGT(self):
+        # Increment the nonce
         nonce = int.from_bytes(self.nonce, 'big')
         nonce += 1
         self.nonce = nonce.to_bytes(16, 'big')
@@ -168,7 +179,7 @@ class FTPClient(Communicator):
         aesgcm = AESGCM(self.session_key)
         enc_payload_with_tag = aesgcm.encrypt(self.nonce, payload, None)
 
-        # send close msg to server
+        # Send close msg to server
         self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + enc_payload_with_tag)
 
         # Wait for server response
@@ -190,14 +201,14 @@ class FTPClient(Communicator):
         nonce = msg[0:16]
         encrypted_payload_with_tag = msg[16:]
 
-        # creating the cipher
+        # Creating the cipher
         aesgcm = AESGCM(self.session_key)
         payload = aesgcm.decrypt(nonce, encrypted_payload_with_tag, None)
 
-        # update the nonce
+        # Update the nonce
         self.nonce = nonce
 
-        # skip sessionID
+        # Skip sessionID
         auth_success = payload[8]
         server_sequence = None
         if auth_success == 1:
@@ -210,8 +221,7 @@ class FTPClient(Communicator):
         # Address
         msg_src = chr(msg_server_init[0])
         if msg_src != self.server_address:
-            print("Server address mismatch detected!")
-            # TODO : error handling
+            raise Exception("Server address mismatch detected!")
 
         msg = msg_server_init[1:]
         idx = 0
@@ -220,8 +230,7 @@ class FTPClient(Communicator):
         header = msg[idx:idx + 16]
         idx += 16
         if header != init_header:
-            print("Header mismatch detected!")
-            # TODO : error handling
+            raise Exception("Header mismatch detected!")
 
         # SessionID
         padded_session_id = msg[idx:idx + 16]
@@ -240,7 +249,7 @@ class FTPClient(Communicator):
         print(self.lt_server_public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo))
 
         # Proof
-        # server_proof = msg[idx:idx + 32]
+        server_proof = msg[idx:idx + 32]
         idx += 32
 
         # ServerECDHPublicKey
@@ -255,27 +264,27 @@ class FTPClient(Communicator):
         ret = msg[:-len(signature)]
         print(msg[:-len(signature)])  # Debug
 
-        return msg[:-len(signature)], signature
+        return msg[:-len(signature)], signature, server_proof
 
     def unpack_command_message(self, msg):
         nonce = msg[0:16]
         encrypted_payload_with_tag = msg[16:]
 
-        # creating the cipher
+        # Creating the cipher
         aesgcm = AESGCM(self.session_key)
         payload = aesgcm.decrypt(nonce, encrypted_payload_with_tag, None)
 
-        # skip sessionID
+        # Skip sessionID
         status = payload[8]
         client_sequence = int.from_bytes(payload[-16:], 'big')
 
         if self.client_sequence >= client_sequence:
             raise Exception('Invalid sequence number for received message')
 
-        # update sequence
+        # Update sequence
         self.client_sequence = client_sequence
 
-        # update the nonce
+        # Update the nonce
         self.nonce = nonce
 
         response_payload = None

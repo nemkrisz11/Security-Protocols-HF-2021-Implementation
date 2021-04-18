@@ -134,3 +134,4 @@ dmypy.json
 # Local test files
 test.py
 *.pem
+*.der
