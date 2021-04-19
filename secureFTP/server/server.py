@@ -13,6 +13,7 @@ from argon2.exceptions import VerifyMismatchError, VerificationError, InvalidHas
 from datetime import datetime, timedelta
 import os
 import sys
+import pathlib
 import getopt
 import secrets
 import pymongo
@@ -267,8 +268,8 @@ class FTPServer(Communicator, metaclass=ServerCaller):
                 print(f'{user_name} successfully authenticated ')
                 session['ConnStatus'] = 1
                 session['SequenceClient'] = int.from_bytes(auth_msg['SequenceNumber'], 'big')
-                session['RootDirectory'] = doc['RootDirectory']
-                session['CurrentDirectory'] = '/'
+                session['RootDirectory'] = os.path.realpath(doc['RootDirectory']) + '/'
+                session['CurrentDirectory'] = session['RootDirectory']
                 session['UserName'] = user_name
 
                 # generating server side sequence number
@@ -386,7 +387,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         elif cmd is Commands.LST:
             response, response_payload = self.command_LST(session)
         elif cmd is Commands.UPL:
-            response, response_payload = self.command_UPL(session, command_msg["Params"])
+            response, response_payload = self.command_UPL(session, command_msg["Params"], command_msg["Payload"])
         elif cmd is Commands.DNL:
             response, response_payload = self.command_DNL(session, command_msg["Params"])
         elif cmd is Commands.RMF:
@@ -414,22 +415,34 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         self.net_if.send_msg(msg_src, enc_msg)
 
     # Commands --------------------------------------------------------------------------------------------------------
+    # Create new directory
     def command_MKD(self, session, params):
         # TODO
         # Note: commas are forbidden!
         return 1
 
+    # Remove existing directory
     def command_RMD(self, session, params):
         # TODO
         return 1
 
+    # Print working directory
     def command_GWD(self, session):
         return b'\x01', session['CurrentDirectory']
 
+    # Change working directory
     def command_CWD(self, session, params):
-        # TODO
-        return 1
+        new_dir_path = pathlib.PurePath(os.path.realpath(session['CurrentDirectory'] + params))
+        if new_dir_path.is_relative_to(os.path.realpath(session['RootDirectory'])):
+            if os.path.exists(new_dir_path):
+                session['CurrentDirectory'] = os.path.realpath(session['CurrentDirectory'] + params) + '/'
+                return b'\x01', session['CurrentDirectory'].replace(session['RootDirectory'], "/").encode('utf-8')
+            else:
+                return b'\x03', b''
+        else:
+            return b'\x02', b''
 
+    # List the contents of the current directory
     def command_LST(self, session):
         try:
             path = os.fsencode(self.users_dir + session['RootDirectory'] + session['CurrentDirectory'])
@@ -437,18 +450,22 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         except:
             return b'\x00', b''
 
-    def command_UPL(self, session, params):
+    # Upload file to server
+    def command_UPL(self, session, params, payload):
         # TODO
         return 1
 
+    # Download file from server
     def command_DNL(self, session, params):
         # TODO
         return 1
 
+    # Remove existing file
     def command_RMF(self, session, params):
         # TODO
         return 1
 
+    # Logout
     def command_LGT(self, msg_src):
         self.active_sessions.pop(msg_src, None)
         return b'\x00', b''
@@ -491,11 +508,16 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
         session_id = payload[0:8]
         cmd = Commands(payload[8])
+
+
         params_len = payload[9]
-        params = payload[10:10 + params_len]
+        params = payload[10:10 + params_len].decode("utf-8")
+        if params[0] == '/':
+            params = '.' + params
+
         cmd_payload = None
         if cmd is Commands.UPL:
-            cmd_payload = payload[10 + params_len:-16].decode('utf-8')
+            cmd_payload = payload[10 + params_len:-16]
         sqn_num = payload[-16:]
 
         return {
