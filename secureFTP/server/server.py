@@ -432,10 +432,13 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
     # Change working directory
     def command_CWD(self, session, params):
-        new_dir_path = pathlib.PurePath(os.path.realpath(session['CurrentDirectory'] + params))
+        if params != "" and params[0] == "/":
+            new_dir_path = pathlib.PurePath(os.path.realpath(session['RootDirectory'] + params))
+        else:
+            new_dir_path = pathlib.PurePath(os.path.realpath(session['CurrentDirectory'] + params))
         if new_dir_path.is_relative_to(os.path.realpath(session['RootDirectory'])):
             if os.path.exists(new_dir_path):
-                session['CurrentDirectory'] = os.path.realpath(session['CurrentDirectory'] + params) + '/'
+                session['CurrentDirectory'] = os.fspath(new_dir_path) + '/'
                 return b'\x01', session['CurrentDirectory'].replace(session['RootDirectory'], "/").encode('utf-8')
             else:
                 return b'\x03', b''
@@ -508,7 +511,6 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
         session_id = payload[0:8]
         cmd = Commands(payload[8])
-
 
         params_len = payload[9]
         params = payload[10:10 + params_len].decode("utf-8")
