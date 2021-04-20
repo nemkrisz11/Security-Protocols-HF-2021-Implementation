@@ -185,7 +185,7 @@ class FTPClient(Communicator):
                     cmd, param = self.process_user_input(user_input)
                 except Exception as ex:
                     print(f"Failed processing input: {ex}")
-                    return
+                    continue
 
                 self.handle_command(cmd, param)
 
@@ -214,7 +214,7 @@ class FTPClient(Communicator):
 
 
     def write_help(self):
-        print("MKD: Creating a folder on the server in the current folder")
+        print("MKD: Creating a folder on the server")
         print("Params: The new folder's {path\}name")
         print("usage: MKD [path]")
         print("RMD - Removing a folder from the server")
@@ -247,7 +247,7 @@ class FTPClient(Communicator):
         if cmd is Commands.MKD:
             self.command_MKD(param)
         elif cmd is Commands.RMD:
-            self.command_RMD()
+            self.command_RMD(param)
         elif cmd is Commands.GWD:
             self.command_GWD()
         elif cmd is Commands.CWD:
@@ -263,8 +263,7 @@ class FTPClient(Communicator):
         elif cmd is Commands.LGT:
             self.command_LGT()
 
-
-    def build_msg_without_payload(self, command, param):
+    def build_msg_without_payload(self, command, param=None):
         self.increment_nonce()
 
         self.server_sequence += 1
@@ -282,8 +281,8 @@ class FTPClient(Communicator):
         enc_payload_with_tag = aesgcm.encrypt(self.nonce, payload, None)
         return enc_payload_with_tag
 
-    def command_MKD(self, params):
-        folders = params.split('\\')
+    def command_MKD(self, param):
+        folders = param.split('\\')
 
         valid_names = True
         for folder in folders:
@@ -295,7 +294,9 @@ class FTPClient(Communicator):
             print("Invalid folder name, supported characters: A-Z, a-z, 1-9, -, _")
             return
 
-        encrypted_msg = self.build_msg_without_payload(Commands.MKD, params)
+        command = Commands.MKD
+
+        encrypted_msg = self.build_msg_without_payload(command, param)
 
         # Send close msg to server
         self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + encrypted_msg)
@@ -306,23 +307,42 @@ class FTPClient(Communicator):
         try:
             status, response_payload = self.unpack_command_message(msg_server_resp)
         except Exception as ex:
-            print(f'Message error for GWD command {ex}')
+            print(f'Message error for {command.name} command {ex}')
             return
 
         if status == 1:
             print("Folder successfully created")
         else:
-            self.write_command_error(Commands.MKD, status)
+            self.write_command_error(command, status, response_payload.decode('utf-8'))
 
     def validate_folder_name(self, str):
         search = re.compile(r'[^A-Za-z0-9_\-]').search
         return not bool(search(str))
 
-    def command_RMD(self):
-        pass
+    def command_RMD(self, param):
+        command = Commands.RMD
+        encrypted_msg = self.build_msg_without_payload(command, param)
+
+        # Send close msg to server
+        self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + encrypted_msg)
+
+        # Wait for server response
+        _, msg_server_resp = self.net_if.receive_msg(blocking=True)
+
+        try:
+            status, response_payload = self.unpack_command_message(msg_server_resp)
+        except Exception as ex:
+            print(f'Message error for {command.name} command {ex}')
+            return
+
+        if status == 1:
+            print("Folder successfully removed")
+        else:
+            self.write_command_error(command, status)
 
     def command_GWD(self):
-        encrypted_msg = self.build_msg_without_payload(Commands.GWD, None)
+        command = Commands.GWD
+        encrypted_msg = self.build_msg_without_payload(command)
 
         # Send close msg to server
         self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + encrypted_msg)
@@ -333,16 +353,17 @@ class FTPClient(Communicator):
         try:
             status, response_payload = self.unpack_command_message(msg_server_resp)
         except Exception as ex:
-            print(f'Message error for GWD command {ex}')
+            print(f'Message error for {command.name} command {ex}')
             return
 
         if status == 1:
             print(response_payload.decode('utf-8'))
         else:
-            self.write_command_error(Commands.GWD, status)
+            self.write_command_error(command, status)
 
     def command_CWD(self, param):
-        encrypted_msg = self.build_msg_without_payload(Commands.CWD, param)
+        command = Commands.CWD
+        encrypted_msg = self.build_msg_without_payload(command, param)
 
         # Send close msg to server
         self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + encrypted_msg)
@@ -353,16 +374,17 @@ class FTPClient(Communicator):
         try:
             status, response_payload = self.unpack_command_message(msg_server_resp)
         except Exception as ex:
-            print(f'Message error for GWD command {ex}')
+            print(f'Message error for {command.name} command {ex}')
             return
 
         if status == 1:
             print(response_payload.decode('utf-8'))
         else:
-            self.write_command_error(Commands.CWD, status)
+            self.write_command_error(command, status)
 
     def command_LST(self):
-        encrypted_msg = self.build_msg_without_payload(Commands.LST, None)
+        command = Commands.LST
+        encrypted_msg = self.build_msg_without_payload(command)
 
         # Send close msg to server
         self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + encrypted_msg)
@@ -373,13 +395,13 @@ class FTPClient(Communicator):
         try:
             status, response_payload = self.unpack_command_message(msg_server_resp)
         except Exception as ex:
-            print(f'Message error for LST command {ex}')
+            print(f'Message error for {command.name} command {ex}')
             return
 
         if status == 1:
             print(response_payload.decode('utf-8'))
         else:
-            self.write_command_error(Commands.LST, status)
+            self.write_command_error(command, status)
 
     def command_UPL(self):
         pass
@@ -391,7 +413,8 @@ class FTPClient(Communicator):
         pass
 
     def command_LGT(self):
-        encrypted_msg = self.build_msg_without_payload(Commands.LGT, None)
+        command = Commands.LGT
+        encrypted_msg = self.build_msg_without_payload(command, None)
 
         # Send close msg to server
         self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + encrypted_msg)
@@ -402,7 +425,7 @@ class FTPClient(Communicator):
         try:
             status, response_payload = self.unpack_command_message(msg_server_close_resp)
         except Exception as ex:
-            print(f'Message error for close session {ex}')
+            print(f'Message error for {command.LGT} command {ex}')
             return
 
         if status == 1:
@@ -412,11 +435,14 @@ class FTPClient(Communicator):
 
             print("Logged out")
         else:
-            self.write_command_error(Commands.LGT, status)
+            self.write_command_error(command, status)
 
-    def write_command_error(self, cmd, status):
+    def write_command_error(self, cmd, status, error_reason=None):
         if status == 0:
-            print(f"{cmd.name} failed for unknown reason")
+            error_text = f"{cmd.name} failed "
+            if error_reason:
+                error_text += error_reason
+            print(error_text)
         elif status == 2:
             print(f"{cmd.name} access violation")
         elif status == 3:

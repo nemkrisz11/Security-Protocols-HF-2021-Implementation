@@ -431,9 +431,12 @@ class FTPServer(Communicator, metaclass=ServerCaller):
                 break
 
         if not valid_names:
-            return b'\x00', b''
+            return b'\x00', 'Invalid folder name'.encode('utf-8')
 
-        new_dir_path = PurePath(os.path.realpath(session['CurrentDirectory'] + params))
+        if params != "" and params[0] == "\\":
+            new_dir_path = PurePath(os.path.realpath(session['RootDirectory'] + params))
+        else:
+            new_dir_path = PurePath(os.path.realpath(session['CurrentDirectory'] + params))
 
         access_violation = False
         try:
@@ -453,8 +456,33 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
     # Remove existing directory
     def command_RMD(self, session, params):
-        # TODO
-        return 1
+        if params != "" and params[0] == "\\":
+            remove_dir_path = PurePath(os.path.realpath(session['RootDirectory'] + params))
+        else:
+            remove_dir_path = PurePath(os.path.realpath(session['CurrentDirectory'] + params))
+
+        access_violation = False
+        try:
+            relativ_path = remove_dir_path.relative_to(os.path.realpath(session['RootDirectory']))
+            # check if the folder is the root directory
+            if relativ_path == PurePath('.'):
+                access_violation = True
+        except ValueError:
+            access_violation = True
+
+        if not access_violation:
+            if os.path.exists(remove_dir_path):
+                if session['CurrentDirectory'] == os.fspath(remove_dir_path) + '\\':
+                    session['CurrentDirectory'] = session['RootDirectory']
+                try:
+                    Path(remove_dir_path).rmdir()
+                    return b'\x01', b''
+                except:
+                    return b'\x00', 'folder not empty'.encode('utf-8')
+            else:
+                return b'\x03', b''
+        else:
+            return b'\x02', b''
 
     # Print working directory
     def command_GWD(self, session):
