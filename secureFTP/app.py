@@ -7,9 +7,9 @@ import sys
 """ Temporary(?) file for testing different client configurations and parallelism, might remove later"""
 
 
-def app_main(net_path):
+def app_main(net_path, users_folder):
     # Create client_1 instance
-    client_1 = FTPClient(address="C", server_address="A", net_path=net_path)
+    client_1 = FTPClient(address="C", server_address="A", net_path=net_path, users_folder=users_folder)
     client_1.init_session()
 
     # Create client_2 instance
@@ -24,6 +24,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     net_path = "./network/"
+    users_folder = "./client/users/"
 
     for opt, arg in opts:
         if opt == '-h' or opt == '--help':
@@ -32,4 +33,4 @@ if __name__ == "__main__":
         elif opt == '-p' or opt == '--path':
             net_path = arg
 
-    app_main(net_path)
+    app_main(net_path, users_folder)

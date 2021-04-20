@@ -519,8 +519,21 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
     # Upload file to server
     def command_UPL(self, session, params, payload):
-        # TODO
-        return 1
+        file_path = os.path.realpath(session['CurrentDirectory'] + params)
+
+        access_violation = False
+        try:
+            PurePath(file_path).relative_to(os.path.realpath(session['RootDirectory']))
+        except ValueError:
+            access_violation = True
+
+        if not access_violation:
+            params_file = open(file_path, 'ab')
+            params_file.write(payload)
+            params_file.close()
+            return b'\x01', b''
+        else:
+            return b'\x02', b''
 
     # Download file from server
     def command_DNL(self, session, params):
@@ -529,9 +542,25 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
     # Remove existing file
     def command_RMF(self, session, params):
-        # TODO
-        return 1
+        if params != "" and params[0] == "\\":
+            file_path = PurePath(os.path.realpath(session['RootDirectory'] + params))
+        else:
+            file_path = PurePath(os.path.realpath(session['CurrentDirectory'] + params))
 
+        access_violation = False
+        try:
+            file_path.relative_to(os.path.realpath(session['RootDirectory']))
+        except ValueError:
+            access_violation = True
+
+        if not access_violation:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                return b'\x01', b''
+            else:
+                return b'\x03', b''
+        else:
+            return b'\x02', b''
     # Logout
     def command_LGT(self, msg_src):
         print(f"Logged out from source: {msg_src}")

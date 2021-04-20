@@ -1,3 +1,6 @@
+from pathlib import Path
+
+
 from secureFTP.netsim.communicator import Communicator
 from secureFTP.server.certification_authority import CertificationAuthority
 from secureFTP.protocol.header import *
@@ -6,11 +9,14 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, padding, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 import secrets
 import re
 import atexit
+import os
+import argon2
 
 class FTPClient(Communicator):
     server_address = None
@@ -34,9 +40,15 @@ class FTPClient(Communicator):
     active_session = False
     authenticated = False
 
-    def __init__(self, address, server_address, net_path):
+    users_folder = None
+    current_user_folder = None
+
+    PARAMS_FILE_NAME = 'params.bin'
+
+    def __init__(self, address, server_address, net_path, users_folder):
         super().__init__(address, net_path)
         self.server_address = server_address
+        self.users_folder = users_folder
         self.lt_ca_public_key = CertificationAuthority().lt_ca_public_key
         atexit.register(self.exit_handler)
 
@@ -147,6 +159,8 @@ class FTPClient(Communicator):
                 print('Authentication successful')
                 self.server_sequence = int.from_bytes(server_sequence, 'big')
                 self.authenticated = True
+                self.current_user_folder = os.path.realpath(self.users_folder + user_name) + '\\'
+                Path(self.current_user_folder).mkdir(parents=True, exist_ok=True)
                 self.command_loop()
             elif auth_success == 0:
                 print('Authentication failed')
@@ -255,15 +269,15 @@ class FTPClient(Communicator):
         elif cmd is Commands.LST:
             self.command_LST()
         elif cmd is Commands.UPL:
-            self.command_UPL()
+            self.command_UPL(param)
         elif cmd is Commands.DNL:
             self.command_DNL()
         elif cmd is Commands.RMF:
-            self.command_RMF()
+            self.command_RMF(param)
         elif cmd is Commands.LGT:
             self.command_LGT()
 
-    def build_msg_without_payload(self, command, param=None):
+    def build_msg(self, command, param=None, msg_payload=None):
         self.increment_nonce()
 
         self.server_sequence += 1
@@ -275,6 +289,8 @@ class FTPClient(Communicator):
         payload = self.session_id + command.value.to_bytes(1, 'big') + param_len.to_bytes(2, 'big')
         if param:
             payload += param.encode('utf-8')
+        if msg_payload:
+            payload += msg_payload
         payload += self.server_sequence.to_bytes(16, 'big')
 
         aesgcm = AESGCM(self.session_key)
@@ -296,7 +312,7 @@ class FTPClient(Communicator):
 
         command = Commands.MKD
 
-        encrypted_msg = self.build_msg_without_payload(command, param)
+        encrypted_msg = self.build_msg(command, param)
 
         # Send close msg to server
         self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + encrypted_msg)
@@ -321,7 +337,7 @@ class FTPClient(Communicator):
 
     def command_RMD(self, param):
         command = Commands.RMD
-        encrypted_msg = self.build_msg_without_payload(command, param)
+        encrypted_msg = self.build_msg(command, param)
 
         # Send close msg to server
         self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + encrypted_msg)
@@ -342,7 +358,7 @@ class FTPClient(Communicator):
 
     def command_GWD(self):
         command = Commands.GWD
-        encrypted_msg = self.build_msg_without_payload(command)
+        encrypted_msg = self.build_msg(command)
 
         # Send close msg to server
         self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + encrypted_msg)
@@ -363,7 +379,7 @@ class FTPClient(Communicator):
 
     def command_CWD(self, param):
         command = Commands.CWD
-        encrypted_msg = self.build_msg_without_payload(command, param)
+        encrypted_msg = self.build_msg(command, param)
 
         # Send close msg to server
         self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + encrypted_msg)
@@ -384,7 +400,7 @@ class FTPClient(Communicator):
 
     def command_LST(self):
         command = Commands.LST
-        encrypted_msg = self.build_msg_without_payload(command)
+        encrypted_msg = self.build_msg(command)
 
         # Send close msg to server
         self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + encrypted_msg)
@@ -403,29 +419,105 @@ class FTPClient(Communicator):
         else:
             self.write_command_error(command, status)
 
-    def command_UPL(self):
-        pass
+    def command_UPL(self, param):
+        file_path = os.path.realpath(param)
 
-    def command_DNL(self):
-        pass
+        if not os.path.exists(file_path):
+            print("File doesn't exist")
+            return
 
-    def command_RMF(self):
-        pass
+        reader = open(file_path, "rb")
+        file = reader.read()
 
-    def command_LGT(self):
-        command = Commands.LGT
-        encrypted_msg = self.build_msg_without_payload(command, None)
+        file_name = os.path.basename(reader.name)
+
+        print("Enter secret key for encryption")
+        key = input()
+
+        salt = secrets.token_bytes(16)
+        iv = secrets.token_bytes(16)
+
+        secret_key = argon2.low_level.hash_secret_raw(key.encode('utf-8'),
+                                                      salt,
+                                                      time_cost=1,
+                                                      memory_cost=8,
+                                                      parallelism=1,
+                                                      hash_len=32,
+                                                      type=argon2.low_level.Type.D)
+
+        padder = padding.ANSIX923(128).padder()
+        padded_file_content = padder.update(file) + padder.finalize()
+
+        cipher = Cipher(algorithms.AES(secret_key), modes.CBC(iv))
+        encryptor = cipher.encryptor()
+        encryted_file = encryptor.update(padded_file_content) + encryptor.finalize()
+
+        digest = hashes.Hash(hashes.SHA256())
+        digest.update(encryted_file)
+        file_hash = digest.finalize()
+
+        command = Commands.UPL
+        encrypted_msg = self.build_msg(command, file_name, encryted_file)
 
         # Send close msg to server
         self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + encrypted_msg)
 
         # Wait for server response
-        _, msg_server_close_resp = self.net_if.receive_msg(blocking=True)
+        _, msg_server_resp = self.net_if.receive_msg(blocking=True)
 
         try:
-            status, response_payload = self.unpack_command_message(msg_server_close_resp)
+            status, response_payload = self.unpack_command_message(msg_server_resp)
         except Exception as ex:
-            print(f'Message error for {command.LGT} command {ex}')
+            print(f'Message error for {command.name} command {ex}')
+            return
+
+        if status == 1:
+            params_file = open(os.path.realpath(self.current_user_folder + self.PARAMS_FILE_NAME), 'ab')
+            params_file.write(file_hash + iv + salt)
+            params_file.close()
+
+            print("File uploaded")
+        else:
+            self.write_command_error(command, status)
+
+    def command_DNL(self):
+        pass
+
+    def command_RMF(self, param):
+        command = Commands.RMF
+        encrypted_msg = self.build_msg(command, param)
+
+        # Send close msg to server
+        self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + encrypted_msg)
+
+        # Wait for server response
+        _, msg_server_resp = self.net_if.receive_msg(blocking=True)
+
+        try:
+            status, response_payload = self.unpack_command_message(msg_server_resp)
+        except Exception as ex:
+            print(f'Message error for {command.name} command {ex}')
+            return
+
+        if status == 1:
+            print("File deleted")
+        else:
+            self.write_command_error(command, status)
+
+    def command_LGT(self):
+        command = Commands.LGT
+        encrypted_msg = self.build_msg(command, None)
+
+        # Send close msg to server
+        self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + encrypted_msg)
+
+        # Wait for server response
+        _, msg_server_resp = self.net_if.receive_msg(blocking=True)
+
+        try:
+            status, response_payload = self.unpack_command_message(msg_server_resp)
+        except Exception as ex:
+            print(f'Message error for {command.name} command {ex}')
             return
 
         if status == 1:
