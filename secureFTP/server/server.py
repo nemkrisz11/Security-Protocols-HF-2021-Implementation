@@ -37,12 +37,8 @@ class FTPServer(Communicator, metaclass=ServerCaller):
     COLLECTION_NAME = 'users'
     MONGODB_ADDRESS = 'mongodb://localhost:27017/'
 
-    users_dir = None
-
     def __init__(self, address, net_path, users_dir):
         super().__init__(address, net_path)
-
-        self.users_dir = users_dir
 
         server_password = input()
 
@@ -448,8 +444,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
     # List the contents of the current directory
     def command_LST(self, session):
         try:
-            path = os.fsencode(self.users_dir + session['RootDirectory'] + session['CurrentDirectory'])
-            return b'\x01', b','.join(os.listdir(path))
+            return b'\x01', b','.join(os.listdir(session['CurrentDirectory']))
         except:
             return b'\x00', b''
 
@@ -514,8 +509,6 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
         params_len = payload[9]
         params = payload[10:10 + params_len].decode("utf-8")
-        if params[0] == '/':
-            params = '.' + params
 
         cmd_payload = None
         if cmd is Commands.UPL:
