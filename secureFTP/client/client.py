@@ -9,7 +9,8 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 import secrets
-
+import re
+import atexit
 
 class FTPClient(Communicator):
     server_address = None
@@ -31,11 +32,21 @@ class FTPClient(Communicator):
     client_sequence = None
 
     active_session = False
+    authenticated = False
 
     def __init__(self, address, server_address, net_path):
         super().__init__(address, net_path)
         self.server_address = server_address
         self.lt_ca_public_key = CertificationAuthority().lt_ca_public_key
+        atexit.register(self.exit_handler)
+
+    def exit_handler(self):
+        print("Exiting")
+        if self.active_session:
+            if self.authenticated:
+                self.command_LGT()
+            else:
+                self.close_session()
 
     def init_session(self):
         # Generate ephemeral ECDH keypair
@@ -92,9 +103,8 @@ class FTPClient(Communicator):
         self.login()
 
     def login(self):
-        authenticated = False
         close = False
-        while not close and not authenticated:
+        while not close and not self.authenticated:
             # Generate nonce
             if not self.nonce:
                 self.starting_nonce = secrets.token_bytes(16)
@@ -136,7 +146,7 @@ class FTPClient(Communicator):
             if auth_success == 1:
                 print('Authentication successful')
                 self.server_sequence = int.from_bytes(server_sequence, 'big')
-                authenticated = True
+                self.authenticated = True
                 self.command_loop()
             elif auth_success == 0:
                 print('Authentication failed')
@@ -204,7 +214,7 @@ class FTPClient(Communicator):
 
 
     def write_help(self):
-        print("MKD: Creating a folder on the server")
+        print("MKD: Creating a folder on the server in the current folder")
         print("Params: The new folder's {path\}name")
         print("usage: MKD [path]")
         print("RMD - Removing a folder from the server")
@@ -235,7 +245,7 @@ class FTPClient(Communicator):
     # Commands --------------------------------------------------------------------------------------------------------
     def handle_command(self, cmd, param):
         if cmd is Commands.MKD:
-            self.command_MKD()
+            self.command_MKD(param)
         elif cmd is Commands.RMD:
             self.command_RMD()
         elif cmd is Commands.GWD:
@@ -272,8 +282,41 @@ class FTPClient(Communicator):
         enc_payload_with_tag = aesgcm.encrypt(self.nonce, payload, None)
         return enc_payload_with_tag
 
-    def command_MKD(self):
-        pass
+    def command_MKD(self, params):
+        folders = params.split('\\')
+
+        valid_names = True
+        for folder in folders:
+            if not self.validate_folder_name(folder):
+                valid_names = False
+                break
+
+        if not valid_names:
+            print("Invalid folder name, supported characters: A-Z, a-z, 1-9, -, _")
+            return
+
+        encrypted_msg = self.build_msg_without_payload(Commands.MKD, params)
+
+        # Send close msg to server
+        self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + encrypted_msg)
+
+        # Wait for server response
+        _, msg_server_resp = self.net_if.receive_msg(blocking=True)
+
+        try:
+            status, response_payload = self.unpack_command_message(msg_server_resp)
+        except Exception as ex:
+            print(f'Message error for GWD command {ex}')
+            return
+
+        if status == 1:
+            print("Folder successfully created")
+        else:
+            self.write_command_error(Commands.MKD, status)
+
+    def validate_folder_name(self, str):
+        search = re.compile(r'[^A-Za-z0-9_\-]').search
+        return not bool(search(str))
 
     def command_RMD(self):
         pass

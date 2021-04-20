@@ -17,7 +17,7 @@ import sys
 import getopt
 import secrets
 import pymongo
-
+import re
 
 class ServerCaller(type):
     def __call__(cls, *args, **kwargs):
@@ -422,9 +422,34 @@ class FTPServer(Communicator, metaclass=ServerCaller):
     # Commands --------------------------------------------------------------------------------------------------------
     # Create new directory
     def command_MKD(self, session, params):
-        # TODO
-        # Note: commas are forbidden!
-        return 1
+        folders = params.split('\\')
+
+        valid_names = True
+        for folder in folders:
+            if not self.validate_folder_name(folder):
+                valid_names = False
+                break
+
+        if not valid_names:
+            return b'\x00', b''
+
+        new_dir_path = PurePath(os.path.realpath(session['CurrentDirectory'] + params))
+
+        access_violation = False
+        try:
+            new_dir_path.relative_to(os.path.realpath(session['RootDirectory']))
+        except ValueError:
+            access_violation = True
+
+        if not access_violation:
+            Path(new_dir_path).mkdir(parents=True, exist_ok=True)
+            return b'\x01', b''
+        else:
+            return b'\x02', b''
+
+    def validate_folder_name(self, str):
+        search = re.compile(r'[^A-Za-z0-9_\-]').search
+        return not bool(search(str))
 
     # Remove existing directory
     def command_RMD(self, session, params):
