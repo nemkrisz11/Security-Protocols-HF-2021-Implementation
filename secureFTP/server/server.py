@@ -433,10 +433,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         if not valid_names:
             return b'\x00', 'Invalid folder name'.encode('utf-8')
 
-        if params != "" and params[0] == "\\":
-            new_dir_path = PurePath(os.path.realpath(session['RootDirectory'] + params))
-        else:
-            new_dir_path = PurePath(os.path.realpath(session['CurrentDirectory'] + params))
+        new_dir_path = self.get_real_path(params, session)
 
         access_violation = self.check_access_violation(new_dir_path, session)
 
@@ -452,10 +449,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
     # Remove existing directory
     def command_RMD(self, session, params):
-        if params != "" and params[0] == "\\":
-            remove_dir_path = PurePath(os.path.realpath(session['RootDirectory'] + params))
-        else:
-            remove_dir_path = PurePath(os.path.realpath(session['CurrentDirectory'] + params))
+        remove_dir_path = self.get_real_path(params, session)
 
         access_violation = self.check_access_violation(remove_dir_path, session, check_root=True)
 
@@ -479,10 +473,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
     # Change working directory
     def command_CWD(self, session, params):
-        if params != "" and params[0] == "\\":
-            new_dir_path = PurePath(os.path.realpath(session['RootDirectory'] + params))
-        else:
-            new_dir_path = PurePath(os.path.realpath(session['CurrentDirectory'] + params))
+        new_dir_path = self.get_real_path(params, session)
 
         access_violation = self.check_access_violation(new_dir_path, session)
 
@@ -518,10 +509,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
     # Download file from server
     def command_DNL(self, session, params):
-        if params != "" and params[0] == "\\":
-            file_path = PurePath(os.path.realpath(session['RootDirectory'] + params))
-        else:
-            file_path = PurePath(os.path.realpath(session['CurrentDirectory'] + params))
+        file_path = self.get_real_path(params, session)
 
         access_violation = self.check_access_violation(file_path, session)
 
@@ -537,10 +525,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
     # Remove existing file
     def command_RMF(self, session, params):
-        if params != "" and params[0] == "\\":
-            file_path = PurePath(os.path.realpath(session['RootDirectory'] + params))
-        else:
-            file_path = PurePath(os.path.realpath(session['CurrentDirectory'] + params))
+        file_path = self.get_real_path(params, session)
 
         access_violation = self.check_access_violation(file_path,session)
 
@@ -557,6 +542,14 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         print(f"Logged out from source: {msg_src}")
         self.active_sessions.pop(msg_src, None)
         return b'\x01', b''
+
+    def get_real_path(self, params, session):
+        if params != "" and params[0] == "\\":
+            path = PurePath(os.path.realpath(session['RootDirectory'] + params))
+        else:
+            path = PurePath(os.path.realpath(session['CurrentDirectory'] + params))
+
+        return path
 
     def check_access_violation(self, path, session, check_root=False):
         access_violation = False
