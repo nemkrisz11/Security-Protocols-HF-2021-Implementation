@@ -438,11 +438,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         else:
             new_dir_path = PurePath(os.path.realpath(session['CurrentDirectory'] + params))
 
-        access_violation = False
-        try:
-            new_dir_path.relative_to(os.path.realpath(session['RootDirectory']))
-        except ValueError:
-            access_violation = True
+        access_violation = self.check_access_violation(new_dir_path, session)
 
         if not access_violation:
             Path(new_dir_path).mkdir(parents=True, exist_ok=True)
@@ -461,14 +457,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         else:
             remove_dir_path = PurePath(os.path.realpath(session['CurrentDirectory'] + params))
 
-        access_violation = False
-        try:
-            relativ_path = remove_dir_path.relative_to(os.path.realpath(session['RootDirectory']))
-            # check if the folder is the root directory
-            if relativ_path == PurePath('.'):
-                access_violation = True
-        except ValueError:
-            access_violation = True
+        access_violation = self.check_access_violation(remove_dir_path, session, check_root=True)
 
         if not access_violation:
             if os.path.exists(remove_dir_path):
@@ -495,11 +484,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         else:
             new_dir_path = PurePath(os.path.realpath(session['CurrentDirectory'] + params))
 
-        access_violation = False
-        try:
-            new_dir_path.relative_to(os.path.realpath(session['RootDirectory']))
-        except ValueError:
-            access_violation = True
+        access_violation = self.check_access_violation(new_dir_path, session)
 
         if not access_violation:
             if os.path.exists(new_dir_path):
@@ -521,11 +506,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
     def command_UPL(self, session, params, payload):
         file_path = os.path.realpath(session['CurrentDirectory'] + params)
 
-        access_violation = False
-        try:
-            PurePath(file_path).relative_to(os.path.realpath(session['RootDirectory']))
-        except ValueError:
-            access_violation = True
+        access_violation = self.check_access_violation(PurePath(file_path), session)
 
         if not access_violation:
             params_file = open(file_path, 'ab')
@@ -542,11 +523,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         else:
             file_path = PurePath(os.path.realpath(session['CurrentDirectory'] + params))
 
-        access_violation = False
-        try:
-            file_path.relative_to(os.path.realpath(session['RootDirectory']))
-        except ValueError:
-            access_violation = True
+        access_violation = self.check_access_violation(file_path, session)
 
         if not access_violation:
             if os.path.exists(file_path):
@@ -565,11 +542,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         else:
             file_path = PurePath(os.path.realpath(session['CurrentDirectory'] + params))
 
-        access_violation = False
-        try:
-            file_path.relative_to(os.path.realpath(session['RootDirectory']))
-        except ValueError:
-            access_violation = True
+        access_violation = self.check_access_violation(file_path,session)
 
         if not access_violation:
             if os.path.exists(file_path):
@@ -584,6 +557,18 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         print(f"Logged out from source: {msg_src}")
         self.active_sessions.pop(msg_src, None)
         return b'\x01', b''
+
+    def check_access_violation(self, path, session, check_root=False):
+        access_violation = False
+        try:
+            relativ_path = path.relative_to(os.path.realpath(session['RootDirectory']))
+            # check if the folder is the root directory
+            if check_root and relativ_path == PurePath('.'):
+                access_violation = True
+        except ValueError:
+            access_violation = True
+
+        return access_violation
 
     # Unpack methods --------------------------------------------------------------------------------------------------
     def unpack_auth_message(self, msg, session_key):
