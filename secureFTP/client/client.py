@@ -271,7 +271,7 @@ class FTPClient(Communicator):
         elif cmd is Commands.UPL:
             self.command_UPL(param)
         elif cmd is Commands.DNL:
-            self.command_DNL()
+            self.command_DNL(param)
         elif cmd is Commands.RMF:
             self.command_RMF(param)
         elif cmd is Commands.LGT:
@@ -450,14 +450,14 @@ class FTPClient(Communicator):
 
         cipher = Cipher(algorithms.AES(secret_key), modes.CBC(iv))
         encryptor = cipher.encryptor()
-        encryted_file = encryptor.update(padded_file_content) + encryptor.finalize()
+        encrypted_file = encryptor.update(padded_file_content) + encryptor.finalize()
 
         digest = hashes.Hash(hashes.SHA256())
-        digest.update(encryted_file)
+        digest.update(encrypted_file)
         file_hash = digest.finalize()
 
         command = Commands.UPL
-        encrypted_msg = self.build_msg(command, file_name, encryted_file)
+        encrypted_msg = self.build_msg(command, file_name, encrypted_file)
 
         # Send close msg to server
         self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + encrypted_msg)
@@ -480,8 +480,84 @@ class FTPClient(Communicator):
         else:
             self.write_command_error(command, status)
 
-    def command_DNL(self):
-        pass
+    def command_DNL(self, param):
+        command = Commands.DNL
+        encrypted_msg = self.build_msg(command, param)
+
+        # Send close msg to server
+        self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + encrypted_msg)
+
+        # Wait for server response
+        _, msg_server_resp = self.net_if.receive_msg(blocking=True)
+
+        try:
+            status, response_payload = self.unpack_command_message(msg_server_resp)
+        except Exception as ex:
+            print(f'Message error for {command.name} command {ex}')
+            return
+
+        if status == 1:
+            try:
+                file_content = self.decrypt_file(response_payload)
+            except Exception as ex:
+                print(f'File decryption error: {ex}')
+                return
+
+            file_name = os.path.basename(param)
+
+            downloaded_file = open(os.path.realpath(self.current_user_folder + file_name), 'wb+')
+            downloaded_file.write(file_content)
+            downloaded_file.close()
+
+            print(f"{file_name} downloaded")
+        else:
+            self.write_command_error(command, status)
+
+    def decrypt_file(self, encrypted_file):
+        print("Enter secret key for decryption")
+        key = input()
+
+        digest = hashes.Hash(hashes.SHA256())
+        digest.update(encrypted_file)
+        file_hash = digest.finalize()
+
+        if not os.path.exists(os.path.realpath(self.current_user_folder + self.PARAMS_FILE_NAME)):
+            raise Exception('No params file for decryption')
+
+        reader = open(os.path.realpath(self.current_user_folder + self.PARAMS_FILE_NAME), 'rb')
+
+        iv = None
+        salt = None
+
+        line = reader.read(64)
+        while line:
+            line_hash = line[0:32]
+            if line_hash == file_hash:
+                iv = line[32:48]
+                salt = line[-16:]
+            line = reader.read(64)
+
+
+        if not iv or not salt:
+            raise Exception('No params for decryption')
+
+        secret_key = argon2.low_level.hash_secret_raw(key.encode('utf-8'),
+                                                      salt,
+                                                      time_cost=1,
+                                                      memory_cost=8,
+                                                      parallelism=1,
+                                                      hash_len=32,
+                                                      type=argon2.low_level.Type.D)
+
+        cipher = Cipher(algorithms.AES(secret_key), modes.CBC(iv))
+        decryptor = cipher.decryptor()
+        file_padded = decryptor.update(encrypted_file) + decryptor.finalize()
+
+        unpadder = padding.ANSIX923(128).unpadder()
+        file_content = unpadder.update(file_padded) + unpadder.finalize()
+
+        return file_content
+
 
     def command_RMF(self, param):
         command = Commands.RMF

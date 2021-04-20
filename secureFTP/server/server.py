@@ -537,8 +537,26 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
     # Download file from server
     def command_DNL(self, session, params):
-        # TODO
-        return 1
+        if params != "" and params[0] == "\\":
+            file_path = PurePath(os.path.realpath(session['RootDirectory'] + params))
+        else:
+            file_path = PurePath(os.path.realpath(session['CurrentDirectory'] + params))
+
+        access_violation = False
+        try:
+            file_path.relative_to(os.path.realpath(session['RootDirectory']))
+        except ValueError:
+            access_violation = True
+
+        if not access_violation:
+            if os.path.exists(file_path):
+                reader = open(file_path, "rb")
+                file = reader.read()
+                return b'\x01', file
+            else:
+                return b'\x03', b''
+        else:
+            return b'\x02', b''
 
     # Remove existing file
     def command_RMF(self, session, params):
