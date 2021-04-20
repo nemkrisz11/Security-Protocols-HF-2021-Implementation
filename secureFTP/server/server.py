@@ -37,10 +37,14 @@ class FTPServer(Communicator, metaclass=ServerCaller):
     COLLECTION_NAME = 'users'
     MONGODB_ADDRESS = 'mongodb://localhost:27017/'
 
+    users_dir = None
+
     def __init__(self, address, net_path, users_dir):
         super().__init__(address, net_path)
 
         server_password = input()
+
+        self.users_dir = os.path.realpath(users_dir)
 
         # Attempt to load existing long-term keypair and certificate
         try:
@@ -264,7 +268,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
                 print(f'{user_name} successfully authenticated ')
                 session['ConnStatus'] = 1
                 session['SequenceClient'] = int.from_bytes(auth_msg['SequenceNumber'], 'big')
-                session['RootDirectory'] = os.path.realpath(doc['RootDirectory']) + '/'
+                session['RootDirectory'] = self.users_dir + doc['RootDirectory'] + '/'
                 session['CurrentDirectory'] = session['RootDirectory']
                 session['UserName'] = user_name
 
@@ -444,7 +448,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
     # List the contents of the current directory
     def command_LST(self, session):
         try:
-            return b'\x01', b','.join(os.listdir(session['CurrentDirectory']))
+            return b'\x01', b','.join(os.listdir(os.fsencode(session['CurrentDirectory'])))
         except:
             return b'\x00', b''
 
