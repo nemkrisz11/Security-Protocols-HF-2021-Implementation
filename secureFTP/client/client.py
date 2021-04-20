@@ -26,6 +26,7 @@ class FTPClient(Communicator):
     server_certificate = None
     server_sequence = None
 
+    starting_nonce = None
     nonce = None
     client_sequence = None
 
@@ -96,7 +97,8 @@ class FTPClient(Communicator):
         while not close and not authenticated:
             # Generate nonce
             if not self.nonce:
-                self.nonce = secrets.token_bytes(16)
+                self.starting_nonce = secrets.token_bytes(16)
+                self.nonce = self.starting_nonce
 
             client_sequence_bytes = secrets.token_bytes(8) + bytes(8)
             self.client_sequence = int.from_bytes(client_sequence_bytes, 'big')
@@ -163,24 +165,193 @@ class FTPClient(Communicator):
 
     def command_loop(self):
         while self.active_session:
-            pass
+            print("Waiting for commands (type \"help\" for descriptions):")
+            user_input = input()
+
+            if user_input == "help":
+                self.write_help()
+            else:
+                try:
+                    cmd, param = self.process_user_input(user_input)
+                except Exception as ex:
+                    print(f"Failed processing input: {ex}")
+                    return
+
+                self.handle_command(cmd, param)
+
+
+    def process_user_input(self, input):
+        words = input.split(' ')
+
+        if len(words) == 0:
+            raise Exception("Invalid imput")
+
+        cmd_text = words[0]
+        cmd = None
+        try:
+            cmd = Commands[cmd_text]
+        except:
+            raise Exception("Invalid command given")
+
+        param = None
+        if cmd in [Commands.MKD, Commands.RMD, Commands.CWD, Commands.UPL, Commands.DNL, Commands.RMF]:
+            if len(words) != 2:
+                raise Exception("Insufficient number of parameters")
+
+            param = words[1]
+
+        return cmd, param
+
+
+    def write_help(self):
+        print("MKD: Creating a folder on the server")
+        print("Params: The new folder's {path\}name")
+        print("usage: MKD [path]")
+        print("RMD - Removing a folder from the server")
+        print("Params: The removable folder's {path\}name")
+        print("usage: RMD [path]")
+        print("GWD - Asking for the name of the current folder (working directory) on the server")
+        print("Params: -")
+        print("usage: GWD")
+        print("CWD - Changing the current folder on the server")
+        print("Params: The folder's {path\}name")
+        print("usage: CWD [path] ")
+        print("LST - Listing the content of the current folder on the server")
+        print("Params: -")
+        print("usage: LST")
+        print("UPL - Uploading a file to the server")
+        print("Params: The file's {path\}name on the local file system")
+        print("usage: UPL [path]")
+        print("DNL - Downloading a file from the server")
+        print("Params: The file's {path\}name on the server")
+        print("usage: DNL [path]")
+        print("RMF - Removing a file from a folder on the server")
+        print("Params: The file's {path\}name on the server")
+        print("usage: RMF [path]")
+        print("LGT - Invalidating the current session and logging out")
+        print("Params: -")
+        print("usage: LGT")
 
     # Commands --------------------------------------------------------------------------------------------------------
-    def command_LGT(self):
-        # Increment the nonce
-        nonce = int.from_bytes(self.nonce, 'big')
-        nonce += 1
-        self.nonce = nonce.to_bytes(16, 'big')
+    def handle_command(self, cmd, param):
+        if cmd is Commands.MKD:
+            self.command_MKD()
+        elif cmd is Commands.RMD:
+            self.command_RMD()
+        elif cmd is Commands.GWD:
+            self.command_GWD()
+        elif cmd is Commands.CWD:
+            self.command_CWD(param)
+        elif cmd is Commands.LST:
+            self.command_LST()
+        elif cmd is Commands.UPL:
+            self.command_UPL()
+        elif cmd is Commands.DNL:
+            self.command_DNL()
+        elif cmd is Commands.RMF:
+            self.command_RMF()
+        elif cmd is Commands.LGT:
+            self.command_LGT()
+
+
+    def build_msg_without_payload(self, command, param):
+        self.increment_nonce()
 
         self.server_sequence += 1
-        payload = self.session_id + Commands.LGT.value.to_bytes(1, 'big') + bytes(2) + \
-                  self.server_sequence.to_bytes(16, 'big')
+
+        param_len = 0
+        if param:
+            param_len = len(param)
+
+        payload = self.session_id + command.value.to_bytes(1, 'big') + param_len.to_bytes(2, 'big')
+        if param:
+            payload += param.encode('utf-8')
+        payload += self.server_sequence.to_bytes(16, 'big')
 
         aesgcm = AESGCM(self.session_key)
         enc_payload_with_tag = aesgcm.encrypt(self.nonce, payload, None)
+        return enc_payload_with_tag
+
+    def command_MKD(self):
+        pass
+
+    def command_RMD(self):
+        pass
+
+    def command_GWD(self):
+        encrypted_msg = self.build_msg_without_payload(Commands.GWD, None)
 
         # Send close msg to server
-        self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + enc_payload_with_tag)
+        self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + encrypted_msg)
+
+        # Wait for server response
+        _, msg_server_resp = self.net_if.receive_msg(blocking=True)
+
+        try:
+            status, response_payload = self.unpack_command_message(msg_server_resp)
+        except Exception as ex:
+            print(f'Message error for GWD command {ex}')
+            return
+
+        if status == 1:
+            print(response_payload.decode('utf-8'))
+        else:
+            self.write_command_error(Commands.GWD, status)
+
+    def command_CWD(self, param):
+        encrypted_msg = self.build_msg_without_payload(Commands.CWD, param)
+
+        # Send close msg to server
+        self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + encrypted_msg)
+
+        # Wait for server response
+        _, msg_server_resp = self.net_if.receive_msg(blocking=True)
+
+        try:
+            status, response_payload = self.unpack_command_message(msg_server_resp)
+        except Exception as ex:
+            print(f'Message error for GWD command {ex}')
+            return
+
+        if status == 1:
+            print(response_payload.decode('utf-8'))
+        else:
+            self.write_command_error(Commands.CWD, status)
+
+    def command_LST(self):
+        encrypted_msg = self.build_msg_without_payload(Commands.LST, None)
+
+        # Send close msg to server
+        self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + encrypted_msg)
+
+        # Wait for server response
+        _, msg_server_resp = self.net_if.receive_msg(blocking=True)
+
+        try:
+            status, response_payload = self.unpack_command_message(msg_server_resp)
+        except Exception as ex:
+            print(f'Message error for LST command {ex}')
+            return
+
+        if status == 1:
+            print(response_payload.decode('utf-8'))
+        else:
+            self.write_command_error(Commands.LST, status)
+
+    def command_UPL(self):
+        pass
+
+    def command_DNL(self):
+        pass
+
+    def command_RMF(self):
+        pass
+
+    def command_LGT(self):
+        encrypted_msg = self.build_msg_without_payload(Commands.LGT, None)
+
+        # Send close msg to server
+        self.net_if.send_msg(self.server_address, bytes(self.address, 'utf-8') + self.nonce + encrypted_msg)
 
         # Wait for server response
         _, msg_server_close_resp = self.net_if.receive_msg(blocking=True)
@@ -195,6 +366,30 @@ class FTPClient(Communicator):
             self.session_id = None
             self.session_key = None
             self.active_session = False
+
+            print("Logged out")
+        else:
+            self.write_command_error(Commands.LGT, status)
+
+    def write_command_error(self, cmd, status):
+        if status == 0:
+            print(f"{cmd.name} failed for unknown reason")
+        elif status == 2:
+            print(f"{cmd.name} access violation")
+        elif status == 3:
+            print(f"{cmd.name} path not found")
+
+    def increment_nonce(self):
+        # Increment the nonce
+        nonce = int.from_bytes(self.nonce, 'big')
+        nonce += 1
+        if nonce >= 2**(16*8):
+            nonce = 0
+        elif nonce == self.starting_nonce:
+            # nyeh
+            pass
+
+        self.nonce = nonce.to_bytes(16, 'big')
 
     # Unpack methods --------------------------------------------------------------------------------------------------
     def unpack_auth_message(self, msg):

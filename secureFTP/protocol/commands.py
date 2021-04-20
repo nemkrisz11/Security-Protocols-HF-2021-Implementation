@@ -1,6 +1,5 @@
 from enum import Enum
 
-
 class Commands(Enum):
     MKD = 0
     RMD = 1

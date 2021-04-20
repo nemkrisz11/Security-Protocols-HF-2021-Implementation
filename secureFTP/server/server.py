@@ -11,9 +11,9 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, VerificationError, InvalidHash
 from datetime import datetime, timedelta
+from pathlib import Path, PurePath
 import os
 import sys
-import pathlib
 import getopt
 import secrets
 import pymongo
@@ -42,9 +42,10 @@ class FTPServer(Communicator, metaclass=ServerCaller):
     def __init__(self, address, net_path, users_dir):
         super().__init__(address, net_path)
 
+        print("Please input the server password")
         server_password = input()
 
-        self.users_dir = os.path.realpath(users_dir)
+        self.users_dir = os.path.realpath(users_dir) + "\\"
 
         # Attempt to load existing long-term keypair and certificate
         try:
@@ -268,8 +269,12 @@ class FTPServer(Communicator, metaclass=ServerCaller):
                 print(f'{user_name} successfully authenticated ')
                 session['ConnStatus'] = 1
                 session['SequenceClient'] = int.from_bytes(auth_msg['SequenceNumber'], 'big')
-                session['RootDirectory'] = self.users_dir + doc['RootDirectory'] + '/'
+                session['RootDirectory'] = self.users_dir + doc['RootDirectory'] + '\\'
                 session['CurrentDirectory'] = session['RootDirectory']
+
+                # making the user directory if not exist yet
+                Path(session['RootDirectory']).mkdir(parents=True, exist_ok=True)
+
                 session['UserName'] = user_name
 
                 # generating server side sequence number
@@ -339,7 +344,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
         # Trying to unpack and decipher the received message
         try:
-            command_msg = self.unpack_auth_message(msg, session_key)
+            command_msg = self.unpack_command_message(msg, session_key)
         except:
             print(f'Message error for command from source: {msg_src}')
             return
@@ -351,9 +356,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         session['SequenceClient'] = client_sequence
 
         # Increment the nonce
-        nonce = int.from_bytes(command_msg['Nonce'], 'big')
-        nonce += 1
-        nonce = nonce.to_bytes(16, 'big')
+        nonce = self.increment_nonce(command_msg['Nonce'])
 
         # Building the default error message
         resp_payload = session_id + b'\x00' + client_sequence.to_bytes(16, 'big')
@@ -402,17 +405,19 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         # Creating the cipher
         aesgcm = AESGCM(session_key)
 
-        # Increment the nonce
-        nonce = int.from_bytes(command_msg['Nonce'], 'big')
-        nonce += 1
-        nonce = nonce.to_bytes(16, 'big')
-
         # Building the message
-        msg = session['SessionID'] + response + session['SequenceClient'].to_bytes(16, 'big') + response_payload
+        msg = session['SessionID'] + response + response_payload + session['SequenceClient'].to_bytes(16, 'big')
         enc_payload_with_tag = aesgcm.encrypt(nonce, msg, None)
         enc_msg = nonce + enc_payload_with_tag
 
         self.net_if.send_msg(msg_src, enc_msg)
+
+    def increment_nonce(self, nonce):
+        nonce = int.from_bytes(nonce, 'big')
+        nonce += 1
+        nonce = nonce.to_bytes(16, 'big')
+
+        return nonce
 
     # Commands --------------------------------------------------------------------------------------------------------
     # Create new directory
@@ -428,18 +433,25 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
     # Print working directory
     def command_GWD(self, session):
-        return b'\x01', session['CurrentDirectory']
+        return b'\x01', session['CurrentDirectory'].replace(session['RootDirectory'], "\\").encode('utf-8')
 
     # Change working directory
     def command_CWD(self, session, params):
-        if params != "" and params[0] == "/":
-            new_dir_path = pathlib.PurePath(os.path.realpath(session['RootDirectory'] + params))
+        if params != "" and params[0] == "\\":
+            new_dir_path = PurePath(os.path.realpath(session['RootDirectory'] + params))
         else:
-            new_dir_path = pathlib.PurePath(os.path.realpath(session['CurrentDirectory'] + params))
-        if new_dir_path.is_relative_to(os.path.realpath(session['RootDirectory'])):
+            new_dir_path = PurePath(os.path.realpath(session['CurrentDirectory'] + params))
+
+        access_violation = False
+        try:
+            new_dir_path.relative_to(os.path.realpath(session['RootDirectory']))
+        except ValueError:
+            access_violation = True
+
+        if not access_violation:
             if os.path.exists(new_dir_path):
-                session['CurrentDirectory'] = os.fspath(new_dir_path) + '/'
-                return b'\x01', session['CurrentDirectory'].replace(session['RootDirectory'], "/").encode('utf-8')
+                session['CurrentDirectory'] = os.fspath(new_dir_path) + '\\'
+                return b'\x01', session['CurrentDirectory'].replace(session['RootDirectory'], "\\").encode('utf-8')
             else:
                 return b'\x03', b''
         else:
@@ -469,8 +481,9 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
     # Logout
     def command_LGT(self, msg_src):
+        print(f"Logged out from source: {msg_src}")
         self.active_sessions.pop(msg_src, None)
-        return b'\x00', b''
+        return b'\x01', b''
 
     # Unpack methods --------------------------------------------------------------------------------------------------
     def unpack_auth_message(self, msg, session_key):
@@ -511,13 +524,13 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         session_id = payload[0:8]
         cmd = Commands(payload[8])
 
-        params_len = payload[9]
-        params = payload[10:10 + params_len].decode("utf-8")
+        params_len = int.from_bytes(payload[9:11], 'big')
+        params = payload[11:11 + params_len].decode("utf-8")
 
         cmd_payload = None
         if cmd is Commands.UPL:
-            cmd_payload = payload[10 + params_len:-16]
-        sqn_num = payload[-16:]
+            cmd_payload = payload[11 + params_len:-16]
+        sqn_num = int.from_bytes(payload[-16:], 'big')
 
         return {
             "Nonce": nonce,
