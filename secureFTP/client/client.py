@@ -96,9 +96,6 @@ class FTPClient(Communicator):
             print(f'Message error for session initiation')
             return
 
-        print("Client sig:")
-        print(signature)
-
         # Verify signature and proof, authenticate server
         if client_random != server_proof:
             print("Invalid proof received, closing connection!")
@@ -119,9 +116,6 @@ class FTPClient(Communicator):
             salt=None,
             info=b"session_key"
         ).derive(shared_secret)
-
-        print("Session key in client:")
-        print(self.session_key)
 
         self.active_session = True
 
@@ -444,7 +438,7 @@ class FTPClient(Communicator):
 
         file_name = os.path.basename(reader.name)
 
-        print("Enter secret key for encryption")
+        print("Enter secret password for encryption")
         key = input()
 
         salt = secrets.token_bytes(16)
@@ -527,7 +521,7 @@ class FTPClient(Communicator):
             self.write_command_error(command, status)
 
     def decrypt_file(self, encrypted_file):
-        print("Enter secret key for decryption")
+        print("Enter secret password for decryption")
         key = input()
 
         digest = hashes.Hash(hashes.SHA256())
@@ -689,8 +683,6 @@ class FTPClient(Communicator):
         idx += server_certificate_length
 
         self.lt_server_public_key = self.server_certificate.public_key()
-        print("Client got server long term public key:")
-        print(self.lt_server_public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo))
 
         # Proof
         server_proof = msg[idx:idx + 32]
@@ -703,10 +695,6 @@ class FTPClient(Communicator):
 
         # Sign(Msg)
         signature = msg[idx:]
-
-        print("Client got:")
-        ret = msg[:-len(signature)]
-        print(msg[:-len(signature)])  # Debug
 
         return msg[:-len(signature)], signature, server_proof
 
