@@ -46,9 +46,9 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
         os_name = os.name
         if os_name == "nt":
-            slash = '\\'
+            self.slash = '\\'
         elif os_name == "posix":
-            slash = '/'
+            self.slash = '/'
         else:
             print("OS not supported, exiting...")
             sys.exit(1)
