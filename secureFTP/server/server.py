@@ -39,13 +39,24 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
     users_dir = None
 
+    slash = None
+
     def __init__(self, address, net_path, users_dir):
         super().__init__(address, net_path)
+
+        os_name = os.name
+        if os_name == "nt":
+            slash = '\\'
+        elif os_name == "posix":
+            slash = '/'
+        else:
+            print("OS not supported, exiting...")
+            sys.exit(1)
 
         print("Please input the server password")
         server_password = input()
 
-        self.users_dir = os.path.realpath(users_dir) + "\\"
+        self.users_dir = os.path.realpath(users_dir) + self.slash
 
         # Attempt to load existing long-term keypair and certificate
         try:
@@ -100,10 +111,6 @@ class FTPServer(Communicator, metaclass=ServerCaller):
     def serve(self):
         while True:
             status, received_msg = self.net_if.receive_msg(blocking=True)
-
-            print("Server got message")  # Debug
-            print(status)  # Debug
-            print(received_msg)  # Debug
 
             msg_src = chr(received_msg[0])
             msg = received_msg[1:]
@@ -161,9 +168,6 @@ class FTPServer(Communicator, metaclass=ServerCaller):
             info=b"session_key"
         ).derive(shared_secret)
 
-        print("Session key in server:")
-        print(session_key)
-
         # Save session parameters
         self.active_sessions[msg_src] = {
             "ConnStatus": 0,
@@ -183,9 +187,6 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         msg = init_header + padded_session_id + \
               len(self.server_certificate).to_bytes(2, 'big') + self.server_certificate + client_proof + \
               ecdh_server_public_key.public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
-
-        print("Server sent:")
-        print(msg)  # Debug
 
         # Sign the message
         signature = self.lt_server_private_key.sign(msg, ec.ECDSA(hashes.SHA512()))
@@ -207,7 +208,6 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         aesgcm = AESGCM(session_key)
 
         # Trying to unpack and decipher the received message
-        auth_msg = None
         try:
             auth_msg = self.unpack_auth_message(msg, session_key)
         except:
@@ -269,10 +269,10 @@ class FTPServer(Communicator, metaclass=ServerCaller):
                 print(f'{user_name} successfully authenticated ')
                 session['ConnStatus'] = 1
                 session['SequenceClient'] = int.from_bytes(auth_msg['SequenceNumber'], 'big')
-                session['RootDirectory'] = self.users_dir + doc['RootDirectory'] + '\\'
+                session['RootDirectory'] = self.users_dir + doc['RootDirectory'] + self.slash
                 session['CurrentDirectory'] = session['RootDirectory']
 
-                # making the user directory if not exist yet
+                # making the user directory if it does not yet exist
                 Path(session['RootDirectory']).mkdir(parents=True, exist_ok=True)
 
                 session['UserName'] = user_name
@@ -422,7 +422,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
     # Commands --------------------------------------------------------------------------------------------------------
     # Create new directory
     def command_MKD(self, session, params):
-        folders = params.split('\\')
+        folders = params.split(self.slash)
 
         valid_names = True
         for folder in folders:
@@ -455,7 +455,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
         if not access_violation:
             if os.path.exists(remove_dir_path):
-                if session['CurrentDirectory'] == os.fspath(remove_dir_path) + '\\':
+                if session['CurrentDirectory'] == os.fspath(remove_dir_path) + self.slash:
                     session['CurrentDirectory'] = session['RootDirectory']
                 try:
                     Path(remove_dir_path).rmdir()
@@ -469,7 +469,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
     # Print working directory
     def command_GWD(self, session):
-        return b'\x01', session['CurrentDirectory'].replace(session['RootDirectory'], "\\").encode('utf-8')
+        return b'\x01', session['CurrentDirectory'].replace(session['RootDirectory'], self.slash).encode('utf-8')
 
     # Change working directory
     def command_CWD(self, session, params):
@@ -479,8 +479,8 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
         if not access_violation:
             if os.path.exists(new_dir_path):
-                session['CurrentDirectory'] = os.fspath(new_dir_path) + '\\'
-                return b'\x01', session['CurrentDirectory'].replace(session['RootDirectory'], "\\").encode('utf-8')
+                session['CurrentDirectory'] = os.fspath(new_dir_path) + self.slash
+                return b'\x01', session['CurrentDirectory'].replace(session['RootDirectory'], self.slash).encode('utf-8')
             else:
                 return b'\x03', b''
         else:
@@ -527,7 +527,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
     def command_RMF(self, session, params):
         file_path = self.get_real_path(params, session)
 
-        access_violation = self.check_access_violation(file_path,session)
+        access_violation = self.check_access_violation(file_path, session)
 
         if not access_violation:
             if os.path.exists(file_path):
@@ -537,6 +537,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
                 return b'\x03', b''
         else:
             return b'\x02', b''
+
     # Logout
     def command_LGT(self, msg_src):
         print(f"Logged out from source: {msg_src}")
@@ -544,7 +545,7 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         return b'\x01', b''
 
     def get_real_path(self, params, session):
-        if params != "" and params[0] == "\\":
+        if params != "" and params[0] == self.slash:
             path = PurePath(os.path.realpath(session['RootDirectory'] + params))
         else:
             path = PurePath(os.path.realpath(session['CurrentDirectory'] + params))

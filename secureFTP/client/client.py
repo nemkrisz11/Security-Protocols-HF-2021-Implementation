@@ -16,6 +16,7 @@ import secrets
 import re
 import atexit
 import os
+import sys
 import argon2
 
 class FTPClient(Communicator):
@@ -43,10 +44,22 @@ class FTPClient(Communicator):
     users_folder = None
     current_user_folder = None
 
+    slash = None
+
     PARAMS_FILE_NAME = 'params.bin'
 
     def __init__(self, address, server_address, net_path, users_folder):
         super().__init__(address, net_path)
+
+        os_name = os.name
+        if os_name == "nt":
+            slash = '\\'
+        elif os_name == "posix":
+            slash = '/'
+        else:
+            print("OS not supported, exiting...")
+            sys.exit(1)
+
         self.server_address = server_address
         self.users_folder = users_folder
         self.lt_ca_public_key = CertificationAuthority().lt_ca_public_key
@@ -159,7 +172,7 @@ class FTPClient(Communicator):
                 print('Authentication successful')
                 self.server_sequence = int.from_bytes(server_sequence, 'big')
                 self.authenticated = True
-                self.current_user_folder = os.path.realpath(self.users_folder + user_name) + '\\'
+                self.current_user_folder = os.path.realpath(self.users_folder + user_name) + self.slash
                 Path(self.current_user_folder).mkdir(parents=True, exist_ok=True)
                 self.command_loop()
             elif auth_success == 0:
@@ -298,7 +311,7 @@ class FTPClient(Communicator):
         return enc_payload_with_tag
 
     def command_MKD(self, param):
-        folders = param.split('\\')
+        folders = param.split(self.slash)
 
         valid_names = True
         for folder in folders:
@@ -536,7 +549,6 @@ class FTPClient(Communicator):
                 iv = line[32:48]
                 salt = line[-16:]
             line = reader.read(64)
-
 
         if not iv or not salt:
             raise Exception('No params for decryption')
