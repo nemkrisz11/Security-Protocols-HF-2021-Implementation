@@ -500,9 +500,9 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         access_violation = self.check_access_violation(PurePath(file_path), session)
 
         if not access_violation:
-            params_file = open(file_path, 'ab')
-            params_file.write(payload)
-            params_file.close()
+            file = open(file_path, 'wb+')
+            file.write(payload)
+            file.close()
             return b'\x01', b''
         else:
             return b'\x02', b''
