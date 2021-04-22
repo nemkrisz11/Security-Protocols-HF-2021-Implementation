@@ -19,6 +19,7 @@ import secrets
 import pymongo
 import re
 
+
 class ServerCaller(type):
     def __call__(cls, *args, **kwargs):
         """ Called when FTPServer constructor is called """
@@ -71,9 +72,6 @@ class FTPServer(Communicator, metaclass=ServerCaller):
             # Generate server long-term keypair
             self.lt_server_private_key = ec.generate_private_key(ec.SECP521R1())
             self.lt_server_public_key = self.lt_server_private_key.public_key()
-
-            print("Server long term public key:")
-            print(self.lt_server_public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo))
 
             with open("./server_public_key.pem", "wb") as public_key_file:
                 public_key_file.write(
@@ -480,7 +478,8 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         if not access_violation:
             if os.path.exists(new_dir_path):
                 session['CurrentDirectory'] = os.fspath(new_dir_path) + self.slash
-                return b'\x01', session['CurrentDirectory'].replace(session['RootDirectory'], self.slash).encode('utf-8')
+                return b'\x01', session['CurrentDirectory'].replace(session['RootDirectory'], self.slash).encode(
+                    'utf-8')
             else:
                 return b'\x03', b''
         else:
@@ -634,7 +633,7 @@ if __name__ == "__main__":
 
     for opt, arg in opts:
         if opt == '-h' or opt == '--help':
-            print("Usage: python server.py -p <network path> -a <address>")
+            print("Usage: python server.py -p <network path> -a <address> -u <users>")
             sys.exit(0)
         elif opt == '-p' or opt == '--path':
             net_path = arg
@@ -642,5 +641,19 @@ if __name__ == "__main__":
             address = arg
         elif opt == '-u' or opt == '--users':
             users_dir = arg
+
+    DATABASE_NAME = 'secureFTP'
+    COLLECTION_NAME = 'users'
+
+    db_client = pymongo.MongoClient("mongodb://localhost:27017/")
+
+    db = db_client[DATABASE_NAME]
+    collection = db[COLLECTION_NAME]
+
+    ph = PasswordHasher()
+
+    test_user = {"UserName": "TestUser", "Password": ph.hash("TestPass"),
+                 'AuthAttempts': 0, 'LockTime': datetime.min, 'RootDirectory': 'TestUser'}
+    collection.insert_one(test_user)
 
     server = FTPServer(address, net_path, users_dir)

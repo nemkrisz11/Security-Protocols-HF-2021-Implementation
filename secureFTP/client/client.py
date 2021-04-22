@@ -1,6 +1,4 @@
 from pathlib import Path
-
-
 from secureFTP.netsim.communicator import Communicator
 from secureFTP.server.certification_authority import CertificationAuthority
 from secureFTP.protocol.header import *
@@ -17,7 +15,9 @@ import re
 import atexit
 import os
 import sys
+import getopt
 import argon2
+
 
 class FTPClient(Communicator):
     server_address = None
@@ -41,14 +41,15 @@ class FTPClient(Communicator):
     active_session = False
     authenticated = False
 
-    users_folder = None
+    users_dir = None
     current_user_folder = None
+    server_working_dir = None
 
     slash = None
 
     PARAMS_FILE_NAME = 'params.bin'
 
-    def __init__(self, address, server_address, net_path, users_folder):
+    def __init__(self, address, server_address, net_path, users_dir):
         super().__init__(address, net_path)
 
         os_name = os.name
@@ -61,7 +62,7 @@ class FTPClient(Communicator):
             sys.exit(1)
 
         self.server_address = server_address
-        self.users_folder = users_folder
+        self.users_dir = users_dir
         self.lt_ca_public_key = CertificationAuthority().lt_ca_public_key
         atexit.register(self.exit_handler)
 
@@ -132,10 +133,9 @@ class FTPClient(Communicator):
             client_sequence_bytes = secrets.token_bytes(8) + bytes(8)
             self.client_sequence = int.from_bytes(client_sequence_bytes, 'big')
 
-            print('Username:')
-            user_name = input()
-            print('Password:')
-            password = input()
+            print("Please fill out your login information!")
+            user_name = input('Username: ')
+            password = input('Password: ')
 
             auth_msg_payload = bytes(1) + self.session_id + \
                                len(user_name).to_bytes(1, 'big') + user_name.encode('utf-8') + \
@@ -166,13 +166,14 @@ class FTPClient(Communicator):
                 print('Authentication successful')
                 self.server_sequence = int.from_bytes(server_sequence, 'big')
                 self.authenticated = True
-                self.current_user_folder = os.path.realpath(self.users_folder + user_name) + self.slash
+                self.current_user_folder = os.path.realpath(self.users_dir + user_name) + self.slash
                 Path(self.current_user_folder).mkdir(parents=True, exist_ok=True)
+                self.server_working_dir = self.slash
+                print("Waiting for commands (type \"help\" for descriptions):")
                 self.command_loop()
             elif auth_success == 0:
                 print('Authentication failed')
-                print('Retry? (y/n)')
-                retry = input()
+                retry = input('Retry? (y/n) > ')
                 if retry != 'y':
                     close = True
                     self.close_session()
@@ -196,8 +197,7 @@ class FTPClient(Communicator):
 
     def command_loop(self):
         while self.active_session:
-            print("Waiting for commands (type \"help\" for descriptions):")
-            user_input = input()
+            user_input = input(self.server_working_dir + "> ")
 
             if user_input == "help":
                 self.write_help()
@@ -210,12 +210,11 @@ class FTPClient(Communicator):
 
                 self.handle_command(cmd, param)
 
-
     def process_user_input(self, input):
         words = input.split(' ')
 
         if len(words) == 0:
-            raise Exception("Invalid imput")
+            raise Exception("Invalid input")
 
         cmd_text = words[0]
         cmd = None
@@ -233,32 +232,39 @@ class FTPClient(Communicator):
 
         return cmd, param
 
-
     def write_help(self):
         print("MKD: Creating a folder on the server")
         print("Params: The new folder's {path\}name")
         print("usage: MKD [path]")
+        print("\n")
         print("RMD - Removing a folder from the server")
         print("Params: The removable folder's {path\}name")
         print("usage: RMD [path]")
+        print("\n")
         print("GWD - Asking for the name of the current folder (working directory) on the server")
         print("Params: -")
         print("usage: GWD")
+        print("\n")
         print("CWD - Changing the current folder on the server")
         print("Params: The folder's {path\}name")
         print("usage: CWD [path] ")
+        print("\n")
         print("LST - Listing the content of the current folder on the server")
         print("Params: -")
         print("usage: LST")
+        print("\n")
         print("UPL - Uploading a file to the server")
         print("Params: The file's {path\}name on the local file system")
         print("usage: UPL [path]")
+        print("\n")
         print("DNL - Downloading a file from the server")
         print("Params: The file's {path\}name on the server")
         print("usage: DNL [path]")
+        print("\n")
         print("RMF - Removing a file from a folder on the server")
         print("Params: The file's {path\}name on the server")
         print("usage: RMF [path]")
+        print("\n")
         print("LGT - Invalidating the current session and logging out")
         print("Params: -")
         print("usage: LGT")
@@ -380,7 +386,7 @@ class FTPClient(Communicator):
             return
 
         if status == 1:
-            print(response_payload.decode('utf-8'))
+            self.server_working_dir = response_payload.decode('utf-8')
         else:
             self.write_command_error(command, status)
 
@@ -401,7 +407,7 @@ class FTPClient(Communicator):
             return
 
         if status == 1:
-            print(response_payload.decode('utf-8'))
+            self.server_working_dir = response_payload.decode('utf-8')
         else:
             self.write_command_error(command, status)
 
@@ -564,7 +570,6 @@ class FTPClient(Communicator):
 
         return file_content
 
-
     def command_RMF(self, param):
         command = Commands.RMF
         encrypted_msg = self.build_msg(command, param)
@@ -626,11 +631,11 @@ class FTPClient(Communicator):
         # Increment the nonce
         nonce = int.from_bytes(self.nonce, 'big')
         nonce += 1
-        if nonce >= 2**(16*8):
+        if nonce >= 2 ** (16 * 8):
             nonce = 0
-        elif nonce == self.starting_nonce:
-            # nyeh
-            pass
+        elif nonce == int.from_bytes(self.starting_nonce, 'big') - 1:
+            print("Message limit reached, exiting...")
+            sys.exit(0)
 
         self.nonce = nonce.to_bytes(16, 'big')
 
@@ -724,3 +729,32 @@ class FTPClient(Communicator):
             response_payload = payload[9:-16]
 
         return status, response_payload
+
+
+if __name__ == "__main__":
+    try:
+        opts, args = getopt.getopt(sys.argv[1:], shortopts='hp:a:s:u:', longopts=['help', 'path=', 'addr=', 'server=', 'users='])
+    except getopt.GetoptError:
+        print("Usage: python client.py -p <network path>")
+        sys.exit(1)
+
+    address = 'B'
+    server_address = 'A'
+    net_path = "./network/"
+    users_dir = "./client/users/"
+
+    for opt, arg in opts:
+        if opt == '-h' or opt == '--help':
+            print("Usage: python client.py -p <network path> -a <address>")
+            sys.exit(0)
+        elif opt == '-p' or opt == '--path':
+            net_path = arg
+        elif opt == '-a' or opt == '--addr':
+            address = arg
+        elif opt == '-s' or opt == '--server':
+            server_address = arg
+        elif opt == '-u' or opt == '--users':
+            users_dir = arg
+
+    client = FTPClient(address=address, server_address="A", net_path=net_path, users_dir=users_dir)
+    client.init_session()
