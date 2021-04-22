@@ -741,7 +741,7 @@ if __name__ == "__main__":
     address = 'B'
     server_address = 'A'
     net_path = "../network/"
-    users_dir = "./client/users/"
+    users_dir = "./users/"
 
     for opt, arg in opts:
         if opt == '-h' or opt == '--help':
