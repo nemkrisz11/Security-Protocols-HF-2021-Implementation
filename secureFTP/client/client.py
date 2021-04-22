@@ -740,7 +740,7 @@ if __name__ == "__main__":
 
     address = 'B'
     server_address = 'A'
-    net_path = "./network/"
+    net_path = "../network/"
     users_dir = "./client/users/"
 
     for opt, arg in opts:
