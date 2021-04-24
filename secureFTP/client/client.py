@@ -387,6 +387,7 @@ class FTPClient(Communicator):
 
         if status == 1:
             self.server_working_dir = response_payload.decode('utf-8')
+            print(self.server_working_dir)
         else:
             self.write_command_error(command, status)
 
