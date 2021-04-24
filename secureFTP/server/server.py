@@ -1,3 +1,4 @@
+from threading import Timer
 from secureFTP.netsim.communicator import Communicator
 from secureFTP.protocol.header import *
 from secureFTP.protocol.commands import *
@@ -42,6 +43,9 @@ class FTPServer(Communicator, metaclass=ServerCaller):
 
     slash = None
 
+    locked_sources = {}
+    scheduler = None
+
     def __init__(self, address, net_path, users_dir):
         super().__init__(address, net_path)
 
@@ -58,6 +62,9 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         server_password = input()
 
         self.users_dir = os.path.realpath(users_dir) + self.slash
+
+        # starting event loop for inactivity checks
+        Timer(30.0, self.check_inactivity).start()
 
         # Attempt to load existing long-term keypair and certificate
         try:
@@ -113,9 +120,14 @@ class FTPServer(Communicator, metaclass=ServerCaller):
             msg_src = chr(received_msg[0])
             msg = received_msg[1:]
 
+            if msg_src in self.locked_sources.keys():
+                if (self.locked_sources[msg_src]["Lock_time"] + timedelta(minutes=10)) > datetime.now():
+                    continue
+
             if msg_src in self.active_sessions.keys():
                 # Existing connection, look up parameters
                 session = self.active_sessions[msg_src]
+                session["Last_message"] = datetime.now()
 
                 if session["ConnStatus"] == 0:
                     # Attempt user authentication
@@ -173,7 +185,9 @@ class FTPServer(Communicator, metaclass=ServerCaller):
             "DHPrivServer": ecdh_server_private_key,
             "DHPubServer": ecdh_server_public_key,
             "DHPubClient": ecdh_client_public_key,
-            "SessionKey": session_key
+            "SessionKey": session_key,
+            "Last_message": datetime.now(),
+            "Auth_message_error": 0
         }
 
         # Pad the SessionID
@@ -210,6 +224,11 @@ class FTPServer(Communicator, metaclass=ServerCaller):
             auth_msg = self.unpack_auth_message(msg, session_key)
         except:
             print(f'Message error for authentication from source: {msg_src}')
+            session["Auth_message_error"] += 1
+            if session["Auth_message_error"] >= 10:
+                print(f"{msg_src} locked for 10 minutes")
+                self.locked_sources[msg_src] = {"Lock_time": datetime.now()}
+                self.command_LGT(msg_src)
             return
 
         if auth_msg['Close']:
@@ -329,6 +348,18 @@ class FTPServer(Communicator, metaclass=ServerCaller):
         else:
             self.net_if.send_msg(msg_src, error_msg)
             print(f'User not found {user_name}')
+
+    def check_inactivity(self):
+        inactive_sources = []
+        for msg_src, session in self.active_sessions.items():
+            if (session["Last_message"] + timedelta(minutes=10)) < datetime.now():
+                print(f"{msg_src} source is inactive")
+                inactive_sources.append(msg_src)
+
+        for source in inactive_sources:
+            self.command_LGT(source)
+
+        Timer(30.0, self.check_inactivity).start()
 
     def handle_command(self, msg_src, msg):
         # Session data
